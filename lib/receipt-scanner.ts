@@ -22,6 +22,18 @@ function resolveReceiptDate(targetDate?: string): string {
   return new Date(`${targetDate}T12:00:00+07:00`).toISOString();
 }
 
+const RETRYABLE_GEMINI_STATUSES = new Set([429, 503]);
+const MAX_GEMINI_ATTEMPTS_PER_MODEL = 3;
+
+function getGeminiErrorStatus(err: any): number | undefined {
+  const status = Number(err?.status || err?.statusCode || err?.response?.status);
+  return Number.isFinite(status) ? status : undefined;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function scanReceiptImage(
   imageBuffer: Buffer,
   mimeType: string = 'image/jpeg',
@@ -70,26 +82,42 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
   const modelErrors: Array<{ model: string; status?: number; message: string }> = [];
 
   for (const modelName of candidateModels) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const result = await model.generateContent([
-        prompt,
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType
+    for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const result = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType
+            }
           }
-        }
-      ]);
-      rawJsonText = result.response.text().trim();
-      if (rawJsonText) break;
-    } catch (err: any) {
-      const status = Number(err?.status || err?.statusCode || err?.response?.status) || undefined;
-      const message = String(err?.message || err || 'Unknown Gemini API error');
-      console.warn(`[ReceiptScanner] Model ${modelName} failed (HTTP ${status || 'unknown'}):`, message);
-      modelErrors.push({ model: modelName, status, message });
-      lastError = err;
+        ]);
+        rawJsonText = result.response.text().trim();
+        if (rawJsonText) break;
+      } catch (err: any) {
+        const status = getGeminiErrorStatus(err);
+        const message = String(err?.message || err || 'Unknown Gemini API error');
+        const retryable = status !== undefined && RETRYABLE_GEMINI_STATUSES.has(status);
+
+        console.warn(
+          `[ReceiptScanner] Model ${modelName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS_PER_MODEL} failed ` +
+          `(HTTP ${status || 'unknown'}): ${message}`
+        );
+        modelErrors.push({ model: modelName, status, message });
+        lastError = err;
+
+        if (!retryable || attempt === MAX_GEMINI_ATTEMPTS_PER_MODEL) break;
+
+        // Exponential backoff with a small jitter prevents simultaneous retries.
+        const delayMs = (1_000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 300);
+        console.info(`[ReceiptScanner] Retrying ${modelName} in ${delayMs}ms after HTTP ${status}.`);
+        await wait(delayMs);
+      }
     }
+
+    if (rawJsonText) break;
   }
 
   if (!rawJsonText) {
