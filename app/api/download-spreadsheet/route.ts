@@ -77,32 +77,33 @@ export async function GET(req: NextRequest) {
   const exportDate = now.toLocaleDateString('id-ID', {
     day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta'
   });
+  const monthlyEntries = [...monthly.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const categoryEntries = [...categories.entries()].sort(([, a], [, b]) => b.amount - a.amount);
+  const activeRecurringAmount = activeRecurring.reduce((sum, item) => sum + item.amount, 0);
   const reportRows: Cell[][] = [
     ['LAPORAN KEUANGAN'],
     ['Dibuat pada', exportDate],
     [],
     ['RINGKASAN KESELURUHAN'],
-    ['Ringkasan', 'Jumlah (Rupiah)', 'Jumlah transaksi'],
-    ['Total pemasukan', totalIncome, incomes.length],
-    ['Total pengeluaran', totalExpense, expenses.length],
-    ['Laba bersih', totalIncome - totalExpense, transactions.length],
-    ['Pengeluaran rutin aktif', activeRecurring.reduce((sum, item) => sum + item.amount, 0), activeRecurring.length],
+    ['Total pemasukan (Rupiah)', 'Total pengeluaran (Rupiah)', 'Laba bersih (Rupiah)', 'Jumlah transaksi pemasukan', 'Jumlah transaksi pengeluaran', 'Langganan aktif', 'Nominal rutin aktif (Rupiah)'],
+    [totalIncome, totalExpense, totalIncome - totalExpense, incomes.length, expenses.length, activeRecurring.length, activeRecurringAmount],
     [],
     ['REKAP BULANAN'],
-    ['Bulan', 'Total pemasukan (Rupiah)', 'Total pengeluaran (Rupiah)', 'Laba bersih (Rupiah)', 'Jumlah transaksi'],
-    ...[...monthly.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, values]) => [formatMonth(key), values.income, values.expense, values.income - values.expense, values.count]),
+    ['Metrik', ...monthlyEntries.map(([key]) => formatMonth(key))],
+    ['Pemasukan (Rupiah)', ...monthlyEntries.map(([, values]) => values.income)],
+    ['Pengeluaran (Rupiah)', ...monthlyEntries.map(([, values]) => values.expense)],
+    ['Laba bersih (Rupiah)', ...monthlyEntries.map(([, values]) => values.income - values.expense)],
+    ['Jumlah transaksi', ...monthlyEntries.map(([, values]) => values.count)],
     [],
     ['PENGELUARAN PER KATEGORI'],
-    ['Kategori pengeluaran', 'Total pengeluaran (Rupiah)', 'Jumlah transaksi', 'Persentase dari total (%)'],
-    ...[...categories.entries()]
-      .sort(([, a], [, b]) => b.amount - a.amount)
-      .map(([category, values]) => [category, values.amount, values.count, totalExpense ? Math.round((values.amount / totalExpense) * 10000) / 100 : 0]),
+    ['Metrik', ...categoryEntries.map(([category]) => category)],
+    ['Total pengeluaran (Rupiah)', ...categoryEntries.map(([, values]) => values.amount)],
+    ['Jumlah transaksi', ...categoryEntries.map(([, values]) => values.count)],
+    ['Persentase dari total (%)', ...categoryEntries.map(([, values]) => totalExpense ? Math.round((values.amount / totalExpense) * 10000) / 100 : 0)],
     [],
     ['PENGELUARAN RUTIN'],
-    ['Status', 'Jumlah langganan aktif', 'Total nominal rutin aktif (Rupiah)'],
-    ['Aktif', activeRecurring.length, activeRecurring.reduce((sum, item) => sum + item.amount, 0)]
+    ['Jumlah langganan aktif', 'Total nominal rutin aktif (Rupiah)'],
+    [activeRecurring.length, activeRecurringAmount]
   ];
 
   // The sep directive makes Excel split columns correctly regardless of the
