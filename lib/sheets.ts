@@ -511,6 +511,7 @@ export interface EditTransactionOptions {
   criteria?: {
     query?: string;
     userId?: string;
+    targetDate?: string;
   };
   newAmount?: number;
   newNote?: string;
