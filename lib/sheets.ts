@@ -535,29 +535,61 @@ export async function editTransaction(
   if (!client) {
     if (mockStore.transactions.length === 0) return null;
     let targetIdx = -1;
-    for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
-      const tx = mockStore.transactions[i];
-      if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
-        continue;
-      }
-      if (opts.targetDate && !matchesTargetDate(tx.created_at, opts.targetDate)) {
-        continue;
-      }
-      if (opts.criteria?.query) {
-        const q = opts.criteria.query.toLowerCase();
-        if (
-          tx.note.toLowerCase().includes(q) ||
-          tx.category.toLowerCase().includes(q) ||
-          tx.raw_message.toLowerCase().includes(q)
-        ) {
-          targetIdx = i;
-          break;
-        }
-      } else {
+    const matchesQuery = (tx: Transaction, query?: string) => {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      return (
+        tx.note.toLowerCase().includes(q) ||
+        tx.category.toLowerCase().includes(q) ||
+        tx.raw_message.toLowerCase().includes(q)
+      );
+    };
+
+    const candidates = mockStore.transactions.filter((tx) => {
+      if (targetUserId && tx.user_id && tx.user_id !== targetUserId) return false;
+      if (opts.targetDate && !matchesTargetDate(tx.created_at, opts.targetDate)) return false;
+      if (opts.criteria?.query) return matchesQuery(tx, opts.criteria.query);
+      return true;
+    });
+
+    if (opts.criteria?.query || opts.targetDate) {
+      const preferred = candidates[candidates.length - 1];
+      if (preferred) targetIdx = mockStore.transactions.indexOf(preferred);
+    } else {
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        if (targetUserId && mockStore.transactions[i].user_id && mockStore.transactions[i].user_id !== targetUserId) continue;
         targetIdx = i;
         break;
       }
     }
+
+    if (targetIdx === -1) {
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        const tx = mockStore.transactions[i];
+        if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
+          continue;
+        }
+        if (opts.targetDate && !matchesTargetDate(tx.created_at, opts.targetDate)) {
+          continue;
+        }
+        if (opts.criteria?.query) {
+          const q = opts.criteria.query.toLowerCase();
+          if (
+            tx.note.toLowerCase().includes(q) ||
+            tx.category.toLowerCase().includes(q) ||
+            tx.raw_message.toLowerCase().includes(q)
+          ) {
+            targetIdx = i;
+            break;
+          }
+        } else {
+          targetIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (targetIdx === -1) return null;
     if (targetIdx === -1) return null;
 
     const prev = { ...mockStore.transactions[targetIdx] };
@@ -584,30 +616,66 @@ export async function editTransaction(
     if (rows.length === 0) return null;
 
     let targetIdx = -1;
+    const matchingRows = rows
+      .map((r, idx) => ({ row: r, idx }))
+      .filter(({ row }) => {
+        const is9Col = row.length >= 9 || row[2] === 'expense' || row[2] === 'income';
+        const rowUserId = is9Col ? (row[1] || '') : '';
+        if (targetUserId && rowUserId && rowUserId !== targetUserId) return false;
 
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i];
-      const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
-      const rowUserId = is9Col ? (r[1] || '') : '';
-      if (targetUserId && rowUserId && rowUserId !== targetUserId) {
-        continue;
+        const rowCreatedAt = (is9Col ? row[8] : row[7]) || '';
+        if (opts.targetDate && !matchesTargetDate(rowCreatedAt, opts.targetDate)) return false;
+
+        if (opts.criteria?.query) {
+          const q = opts.criteria.query.toLowerCase();
+          const text = (is9Col ? `${row[4]} ${row[5]} ${row[6]}` : `${row[3]} ${row[4]} ${row[5]}`).toLowerCase();
+          return text.includes(q);
+        }
+
+        return true;
+      });
+
+    if (opts.criteria?.query || opts.targetDate) {
+      const preferred = matchingRows[matchingRows.length - 1];
+      if (preferred) targetIdx = preferred.idx;
+    } else {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
+        const rowUserId = is9Col ? (r[1] || '') : '';
+        if (targetUserId && rowUserId && rowUserId !== targetUserId) {
+          continue;
+        }
+        targetIdx = i;
+        break;
       }
+    }
 
-      const rowCreatedAt = (is9Col ? r[8] : r[7]) || '';
-      if (opts.targetDate && !matchesTargetDate(rowCreatedAt, opts.targetDate)) {
-        continue;
-      }
+    if (targetIdx === -1) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
+        const rowUserId = is9Col ? (r[1] || '') : '';
+        if (targetUserId && rowUserId && rowUserId !== targetUserId) {
+          continue;
+        }
 
-      if (opts.criteria?.query) {
-        const q = opts.criteria.query.toLowerCase();
-        const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
-        if (text.includes(q)) {
+        const rowCreatedAt = (is9Col ? r[8] : r[7]) || '';
+        if (opts.targetDate && !matchesTargetDate(rowCreatedAt, opts.targetDate)) {
+          continue;
+        }
+
+        if (opts.criteria?.query) {
+          const q = opts.criteria.query.toLowerCase();
+          const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
+          if (text.includes(q)) {
+            targetIdx = i;
+            break;
+          }
+        } else {
           targetIdx = i;
           break;
         }
-      } else {
-        targetIdx = i;
-        break;
       }
     }
 

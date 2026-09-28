@@ -15,10 +15,18 @@ export interface ScannedReceiptResult {
 /**
  * Scan receipt image using Gemini Vision and automatically record to Google Sheets
  */
+function resolveReceiptDate(targetDate?: string): string {
+  if (!targetDate) return new Date().toISOString();
+  const [year, month, day] = targetDate.split('-').map(Number);
+  if (!year || !month || !day) return new Date().toISOString();
+  return new Date(`${targetDate}T12:00:00+07:00`).toISOString();
+}
+
 export async function scanReceiptImage(
   imageBuffer: Buffer,
   mimeType: string = 'image/jpeg',
-  userId?: string
+  userId?: string,
+  targetDate?: string
 ): Promise<ScannedReceiptResult> {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -116,7 +124,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 
     const merchant = data.merchant || 'Struk';
     const note = data.note || `${merchant} (Scan Struk)`;
-    const nowIso = new Date().toISOString();
+    const transactionDate = resolveReceiptDate(targetDate);
 
     const transaction: Transaction = {
       id: crypto.randomUUID(),
@@ -127,7 +135,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       note,
       raw_message: `[Scan Struk] ${merchant} - Rp${amount}`,
       source: 'manual',
-      created_at: nowIso
+      created_at: transactionDate
     };
 
     // Save to Google Sheets

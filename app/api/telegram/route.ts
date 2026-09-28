@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { handleUserMessage } from '@/lib/transactions';
 import { sendTelegramTextMessage } from '@/lib/telegram';
 import { scanReceiptImage } from '@/lib/receipt-scanner';
+import { parseQueryDate } from '@/lib/parser';
 
 // In-memory set to deduplicate processed Telegram update_ids
 const processedUpdateIds = new Set<number>();
@@ -63,7 +64,9 @@ export async function POST(req: NextRequest) {
             const arrayBuffer = await imageRes.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
 
-            const scanResult = await scanReceiptImage(buffer, 'image/jpeg', String(chatId));
+            const captionText = message.caption || '';
+            const targetDate = parseQueryDate(captionText).targetDate;
+            const scanResult = await scanReceiptImage(buffer, 'image/jpeg', String(chatId), targetDate);
             await sendTelegramTextMessage({
               chatId,
               text: scanResult.replyText

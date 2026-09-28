@@ -278,6 +278,9 @@ export async function handleUserMessage(
     case 'MENU':
       return handleMenu(userId);
 
+    case 'DOWNLOAD_SPREADSHEET':
+      return await handleDownloadSpreadsheet(userId);
+
     case 'AI_ADVICE':
       return await handleAiAdvice(userId);
 
@@ -905,6 +908,32 @@ async function handleAiAdvice(userId?: string): Promise<ExecutionResult> {
 
   const replyText = await generateFinancialAdvice(recent, '30 Hari Terakhir');
   return { success: true, replyText };
+}
+
+async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResult> {
+  if (!userId) {
+    return {
+      success: false,
+      replyText: '⚠️ Fitur unduh spreadsheet membutuhkan identitas pengguna aktif. Silakan coba lagi dari chat yang terautentikasi.'
+    };
+  }
+
+  const userBaseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  const exportUrl = `${userBaseUrl.replace(/\/$/, '')}/api/download-spreadsheet?userId=${encodeURIComponent(userId)}`;
+
+  return {
+    success: true,
+    replyText: `📤 *Download Spreadsheet Pribadi*
+
+Data yang akan diunduh hanya mencakup transaksi milik user ini saja, dan tidak akan menampilkan data user lain.
+
+🔐 *Privasi aktif:* data user lain akan dibuang dari file export.
+
+👉 Klik tautan berikut untuk mengunduh:
+${exportUrl}
+
+> File dibuat khusus untuk user: ${userId}`
+  };
 }
 
 /**

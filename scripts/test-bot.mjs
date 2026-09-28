@@ -1,4 +1,4 @@
-import { parseMessage, parseAmount, detectCategory } from '../lib/parser';
+import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
 
 async function runTests() {
@@ -115,6 +115,18 @@ async function runTests() {
   const p29 = parseMessage('cara langganan');
   console.assert(p29.intent === 'HELP_RECURRING', 'p29 failed: ' + JSON.stringify(p29));
 
+  const p30 = parseMessage('download spreadsheet');
+  console.assert(p30.intent === 'DOWNLOAD_SPREADSHEET', 'p30 failed: ' + JSON.stringify(p30));
+
+  const p31 = parseMessage('unduh spreadsheet excel');
+  console.assert(p31.intent === 'DOWNLOAD_SPREADSHEET', 'p31 failed: ' + JSON.stringify(p31));
+
+  const p32 = parseMessage('edit 27 september 2026 jadi 250000');
+  console.assert(p32.intent === 'EDIT_LAST' && p32.targetDate === '2026-09-27', 'p32 failed: ' + JSON.stringify(p32));
+
+  const p33 = parseQueryDate('struk tanggal 27 september 2026');
+  console.assert(p33 && p33.targetDate === '2026-09-27', 'p33 failed: ' + JSON.stringify(p33));
+
   console.log('✓ parseMessage passed!');
 
   console.log('--- 4. Testing End-to-End Business Logic ---');
@@ -188,6 +200,10 @@ async function runTests() {
   const helpRes = await handleUserMessage('bantuan');
   console.assert(helpRes.success && helpRes.replyText.includes('Format Pesan') || helpRes.replyText.includes('Panduan'), 'help response should be successful: ' + helpRes.replyText);
   console.log('Help response: OK');
+
+  const downloadRes = await handleUserMessage('download spreadsheet', 'user_export');
+  console.assert(downloadRes.success && downloadRes.replyText.includes('/api/download-spreadsheet?userId=user_export') && downloadRes.replyText.includes('hanya data user'), 'download spreadsheet response should include a user-scoped download link: ' + downloadRes.replyText);
+  console.log('Download spreadsheet response: OK');
 
   const historicalDeleteOutput = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_output_delete');
   console.assert(historicalDeleteOutput.success, 'historical delete setup failed: ' + historicalDeleteOutput.replyText);

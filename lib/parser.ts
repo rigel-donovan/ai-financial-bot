@@ -379,7 +379,7 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
 /**
  * Main intent parser
  */
-function extractDateContextFromText(text: string): { targetDate?: string; startDate?: string; endDate?: string; displayDate?: string } | null {
+export function extractDateContextFromText(text: string): { targetDate?: string; startDate?: string; endDate?: string; displayDate?: string } | null {
   const trimmed = (text || '').trim();
   if (!trimmed) return null;
 
@@ -419,6 +419,13 @@ export function parseMessage(
   if (/^(?:menu|bantuan|help|halo|hi|hai|mulai|start|fitur|panduan|cara pakai)$/i.test(lower)) {
     return {
       intent: 'MENU',
+      rawMessage: trimmed
+    };
+  }
+
+  if (/^(?:download\s+spreadsheet|unduh\s+spreadsheet|download\s+excel|unduh\s+excel|export\s+spreadsheet|ekspor\s+spreadsheet|download\s+data|unduh\s+data)$/i.test(lower)) {
+    return {
+      intent: 'DOWNLOAD_SPREADSHEET',
       rawMessage: trimmed
     };
   }

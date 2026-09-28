@@ -8,6 +8,7 @@ import {
 } from '@/lib/whatsapp';
 import { handleUserMessage } from '@/lib/transactions';
 import { scanReceiptImage } from '@/lib/receipt-scanner';
+import { parseQueryDate } from '@/lib/parser';
 
 /**
  * GET: Webhook verification challenge from WhatsApp Cloud API
@@ -90,6 +91,8 @@ export async function POST(req: NextRequest) {
 
   // Check if message is an image (receipt photo)
   if (message.type === 'image' && message.image?.id) {
+    const captionText = message?.caption || message?.text?.body || '';
+    const targetDate = parseQueryDate(captionText).targetDate;
     const token = process.env.WHATSAPP_ACCESS_TOKEN;
     if (token) {
       try {
@@ -111,7 +114,7 @@ export async function POST(req: NextRequest) {
           const buffer = Buffer.from(arrayBuffer);
 
           // 3. Scan receipt with Gemini Vision & auto-record to Google Sheets
-          const scanResult = await scanReceiptImage(buffer, mimeType, from);
+          const scanResult = await scanReceiptImage(buffer, mimeType, from, targetDate);
 
           // 4. Send reply
           const templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'catatan_transaksi';

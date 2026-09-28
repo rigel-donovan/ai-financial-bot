@@ -41,6 +41,7 @@ export type IntentType =
   | 'DELETE_LAST'
   | 'EDIT_LAST'
   | 'MENU'
+  | 'DOWNLOAD_SPREADSHEET'
   | 'AI_ADVICE'
   | 'ADD_RECURRING'
   | 'LIST_RECURRING'
