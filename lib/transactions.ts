@@ -918,7 +918,7 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
     };
   }
 
-  const userBaseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  const userBaseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://wa-bot-tau.vercel.app';
   const exportUrl = `${userBaseUrl.replace(/\/$/, '')}/api/download-spreadsheet?userId=${encodeURIComponent(userId)}`;
 
   return {
