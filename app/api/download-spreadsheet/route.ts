@@ -7,14 +7,15 @@ function csvEscape(value: Cell): string {
   let raw = String(value ?? '');
   // Prevent spreadsheet formula execution in user-defined category names.
   if (/^[=+@\-\t\r]/.test(raw)) raw = `'${raw}`;
-  if (raw.includes(',') || raw.includes('"') || raw.includes('\n') || raw.includes('\r')) {
+  if (raw.includes(';') || raw.includes('"') || raw.includes('\n') || raw.includes('\r')) {
     return `"${raw.replace(/"/g, '""')}"`;
   }
   return raw;
 }
 
 function buildCsv(rows: Cell[][]): string {
-  return rows.map((row) => row.map(csvEscape).join(',')).join('\r\n');
+  // Excel on Indonesian locale expects semicolon-delimited CSV files.
+  return rows.map((row) => row.map(csvEscape).join(';')).join('\r\n');
 }
 
 function monthKey(iso: string): string {
@@ -81,30 +82,32 @@ export async function GET(req: NextRequest) {
     ['Dibuat pada', exportDate],
     [],
     ['RINGKASAN KESELURUHAN'],
-    ['Metrik', 'Jumlah', 'Transaksi'],
+    ['Ringkasan', 'Jumlah (Rupiah)', 'Jumlah transaksi'],
     ['Total pemasukan', totalIncome, incomes.length],
     ['Total pengeluaran', totalExpense, expenses.length],
     ['Laba bersih', totalIncome - totalExpense, transactions.length],
     ['Pengeluaran rutin aktif', activeRecurring.reduce((sum, item) => sum + item.amount, 0), activeRecurring.length],
     [],
     ['REKAP BULANAN'],
-    ['Bulan', 'Pemasukan', 'Pengeluaran', 'Laba bersih', 'Jumlah transaksi'],
+    ['Bulan', 'Total pemasukan (Rupiah)', 'Total pengeluaran (Rupiah)', 'Laba bersih (Rupiah)', 'Jumlah transaksi'],
     ...[...monthly.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, values]) => [formatMonth(key), values.income, values.expense, values.income - values.expense, values.count]),
     [],
     ['PENGELUARAN PER KATEGORI'],
-    ['Kategori', 'Total pengeluaran', 'Jumlah transaksi', 'Persentase pengeluaran'],
+    ['Kategori pengeluaran', 'Total pengeluaran (Rupiah)', 'Jumlah transaksi', 'Persentase dari total (%)'],
     ...[...categories.entries()]
       .sort(([, a], [, b]) => b.amount - a.amount)
-      .map(([category, values]) => [category, values.amount, values.count, totalExpense ? values.amount / totalExpense : 0]),
+      .map(([category, values]) => [category, values.amount, values.count, totalExpense ? Math.round((values.amount / totalExpense) * 10000) / 100 : 0]),
     [],
     ['PENGELUARAN RUTIN'],
-    ['Status', 'Jumlah langganan aktif', 'Total nominal rutin aktif'],
+    ['Status', 'Jumlah langganan aktif', 'Total nominal rutin aktif (Rupiah)'],
     ['Aktif', activeRecurring.length, activeRecurring.reduce((sum, item) => sum + item.amount, 0)]
   ];
 
-  const csv = `\uFEFF${buildCsv(reportRows)}`;
+  // The sep directive makes Excel split columns correctly regardless of the
+  // computer's regional list separator setting.
+  const csv = `\uFEFFsep=;\r\n${buildCsv(reportRows)}`;
   const fileName = `laporan-keuangan-${now.toISOString().slice(0, 10)}.csv`;
 
   return new NextResponse(csv, {
