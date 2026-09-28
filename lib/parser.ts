@@ -347,12 +347,38 @@ export function parseMessage(
   if (isQueryOrReport) {
     const dateInfo = parseQueryDate(trimmed);
 
-    // 3a. Khusus Pemasukan
-    // Contoh: "list pemasukan tanggal 27 september 2026", "daftar pemasukan kemarin", "rincian uang masuk"
-    if (
+    const hasIncomeWord =
       /\b(?:pemasukan|income|uang\s+masuk)\b/i.test(lower) ||
-      (/\bmasuk\b/i.test(lower) && !/\b(?:pengeluaran|biaya|keluar)\b/i.test(lower))
-    ) {
+      (/\bmasuk\b/i.test(lower) && !/\b(?:pengeluaran|biaya|keluar)\b/i.test(lower));
+
+    const hasExpenseWord =
+      /\b(?:pengeluaran|biaya|expense)\b/i.test(lower) ||
+      (/\bkeluar\b/i.test(lower) && !/\b(?:pemasukan|income|masuk)\b/i.test(lower));
+
+    // 3a. Gabungan Pemasukan & Pengeluaran ("list pemasukan dan pengeluaran", "semua transaksi", dsb)
+    if (hasIncomeWord && hasExpenseWord) {
+      return {
+        intent: 'LIST_ALL',
+        period: dateInfo.period,
+        targetDate: dateInfo.targetDate,
+        displayDate: dateInfo.displayDate,
+        rawMessage: trimmed
+      };
+    }
+
+    if (/\b(?:semua\s+transaksi|daftar\s+transaksi|list\s+transaksi|semua)\b/i.test(lower) && !hasIncomeWord && !hasExpenseWord) {
+      return {
+        intent: 'LIST_ALL',
+        period: dateInfo.period,
+        targetDate: dateInfo.targetDate,
+        displayDate: dateInfo.displayDate,
+        rawMessage: trimmed
+      };
+    }
+
+    // 3b. Khusus Pemasukan
+    // Contoh: "list pemasukan tanggal 27 september 2026", "daftar pemasukan kemarin", "rincian uang masuk"
+    if (hasIncomeWord && !hasExpenseWord) {
       return {
         intent: 'LIST_INCOMES',
         period: dateInfo.period,
@@ -362,12 +388,9 @@ export function parseMessage(
       };
     }
 
-    // 3b. Khusus Pengeluaran
+    // 3c. Khusus Pengeluaran
     // Contoh: "list pengeluaran hari ini", "daftar pengeluaran 27 sep 2026", "rincian biaya kemarin"
-    if (
-      /\b(?:pengeluaran|biaya|expense)\b/i.test(lower) ||
-      (/\bkeluar\b/i.test(lower) && !/\b(?:pemasukan|income|masuk)\b/i.test(lower))
-    ) {
+    if (hasExpenseWord && !hasIncomeWord) {
       return {
         intent: 'LIST_EXPENSES',
         period: dateInfo.period,

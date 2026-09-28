@@ -87,6 +87,9 @@ export async function handleUserMessage(
     case 'LIST_INCOMES':
       return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate);
 
+    case 'LIST_ALL':
+      return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate);
+
     case 'DELETE_LAST':
       return await handleDeleteLast(parsed);
 
@@ -406,6 +409,118 @@ async function handleListTransactions(
   if (Object.keys(categoryTotals).length > 1) {
     replyText += `\n🏷️ *Rincian Kategori:*\n${catLines}`;
   }
+
+  return { success: true, replyText };
+}
+
+/**
+ * Handle combined full transaction list for both expenses and incomes
+ */
+async function handleListAllTransactions(
+  period: 'day' | 'week' | 'month',
+  targetDate?: string,
+  displayDate?: string
+): Promise<ExecutionResult> {
+  const transactions = await getAllTransactions();
+  const now = new Date();
+
+  let titlePeriod = '';
+  let inRange: Transaction[];
+
+  if (targetDate) {
+    titlePeriod = displayDate || targetDate;
+    inRange = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+  } else {
+    let startDate: Date;
+    if (period === 'day') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })})`;
+    } else if (period === 'week') {
+      const day = now.getDay() || 7;
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
+    }
+
+    inRange = transactions.filter((t) => {
+      try {
+        const txDate = new Date(t.created_at);
+        return txDate >= startDate && txDate <= now;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  const expenses = inRange.filter(t => t.type === 'expense');
+  const incomes = inRange.filter(t => t.type === 'income');
+
+  const totalExpense = expenses.reduce((sum, t) => sum + t.amount, 0);
+  const totalIncome = incomes.reduce((sum, t) => sum + t.amount, 0);
+  const netSavings = totalIncome - totalExpense;
+
+  if (inRange.length === 0) {
+    return {
+      success: true,
+      replyText:
+        `📋 *Daftar Lengkap Transaksi — ${titlePeriod}*\n\n` +
+        `_Belum ada catatan transaksi (pemasukan maupun pengeluaran) di periode ini._\n\n` +
+        `💡 Ketik pesan santai seperti \`beli kopi 25rb\` atau \`dapat transferan 500rb\` untuk mulai mencatat.`
+    };
+  }
+
+  const formatItem = (t: Transaction, idx: number, emoji: string) => {
+    let timeStr = '';
+    try {
+      const d = new Date(t.created_at);
+      timeStr = d.toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Asia/Jakarta'
+      });
+    } catch {
+      timeStr = '';
+    }
+    const timeTag = timeStr ? ` (${timeStr})` : '';
+    const noteStr = t.note || t.category;
+    return `${idx + 1}. ${emoji} *${formatRp(t.amount)}* — ${noteStr} _[${t.category}]_${timeTag}`;
+  };
+
+  const sections: string[] = [];
+
+  // Incomes Section
+  if (incomes.length > 0) {
+    const incomeItems = incomes.map((t, idx) => formatItem(t, idx, '🟢')).join('\n');
+    sections.push(
+      `🟢 *PEMASUKAN (${incomes.length} transaksi):*\n` +
+      incomeItems +
+      `\n💰 *Total Pemasukan:* *${formatRp(totalIncome)}*`
+    );
+  } else {
+    sections.push(`🟢 *PEMASUKAN:* _(Belum ada pemasukan di periode ini)_`);
+  }
+
+  // Expenses Section
+  if (expenses.length > 0) {
+    const expenseItems = expenses.map((t, idx) => formatItem(t, idx, '🔴')).join('\n');
+    sections.push(
+      `🔴 *PENGELUARAN (${expenses.length} transaksi):*\n` +
+      expenseItems +
+      `\n💰 *Total Pengeluaran:* *${formatRp(totalExpense)}*`
+    );
+  } else {
+    sections.push(`🔴 *PENGELUARAN:* _(Belum ada pengeluaran di periode ini)_`);
+  }
+
+  const replyText =
+    `📋 *Daftar Lengkap Transaksi — ${titlePeriod}*\n\n` +
+    sections.join('\n\n') +
+    `\n\n━━━━━━━━━━━━━━━━━━\n` +
+    `💵 *Total Pemasukan:* *${formatRp(totalIncome)}*\n` +
+    `💳 *Total Pengeluaran:* *${formatRp(totalExpense)}*\n` +
+    `📈 *Tabungan Bersih:* *${formatRp(netSavings)}* (${inRange.length} total transaksi)`;
 
   return { success: true, replyText };
 }

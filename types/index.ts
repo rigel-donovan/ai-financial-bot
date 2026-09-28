@@ -35,6 +35,7 @@ export type IntentType =
   | 'SUMMARY_MONTH'
   | 'LIST_EXPENSES'
   | 'LIST_INCOMES'
+  | 'LIST_ALL'
   | 'DELETE_LAST'
   | 'EDIT_LAST'
   | 'MENU'

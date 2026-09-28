@@ -54,6 +54,12 @@ async function runTests() {
   const p12 = parseMessage('27 september 2026 beli tiket 500rb');
   console.assert(p12.intent === 'RECORD_EXPENSE' && p12.amount === 500000, 'p12 failed: ' + JSON.stringify(p12));
 
+  const p13 = parseMessage('list pemasukan dan pengeluaran hari ini');
+  console.assert(p13.intent === 'LIST_ALL', 'p13 failed: ' + JSON.stringify(p13));
+
+  const p14 = parseMessage('list pengeluaran dan pemasukan kemarin');
+  console.assert(p14.intent === 'LIST_ALL', 'p14 failed: ' + JSON.stringify(p14));
+
   console.log('✓ parseMessage passed!');
 
   console.log('--- 4. Testing End-to-End Business Logic ---');
@@ -92,6 +98,10 @@ async function runTests() {
   const res9 = await handleUserMessage('buatin list tanggal 27 september 2026');
   console.assert(res9.success && res9.replyText.includes('27 September 2026'), 'res9 failed: ' + res9.replyText);
   console.log('Summary list by date: OK');
+
+  const res10 = await handleUserMessage('list pemasukan dan pengeluaran hari ini');
+  console.assert(res10.success && res10.replyText.includes('PEMASUKAN') && res10.replyText.includes('PENGELUARAN'), 'res10 failed: ' + res10.replyText);
+  console.log('List all (incomes and expenses): OK');
 
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! EVERYTHING WORKS & MAKES SENSE.');
 }
