@@ -161,7 +161,22 @@ async function runTests() {
   console.assert(res13.success && res13.replyText.includes('Spotify'), 'res13 failed: ' + res13.replyText);
   console.log('Stop recurring via "stop langganan": OK');
 
-  console.log('--- 5. Testing Multi-User Data Isolation ---');
+  console.log('--- 5. Testing Historical Date Transaction Commands ---');
+  const pastExpense = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_date');
+  console.assert(pastExpense.success && pastExpense.replyText.includes('Rp45.000'), 'Historical expense record failed: ' + pastExpense.replyText);
+
+  const pastDelete = await handleUserMessage('hapus transaksi 27 september 2026', 'user_date');
+  console.assert(pastDelete.success && pastDelete.replyText.includes('Dibatalkan'), 'Historical delete failed: ' + pastDelete.replyText);
+
+  const pastIncome = await handleUserMessage('27 september 2026 masuk 200000 freelance', 'user_date');
+  console.assert(pastIncome.success && pastIncome.replyText.includes('Rp200.000'), 'Historical income record failed: ' + pastIncome.replyText);
+
+  const pastEdit = await handleUserMessage('edit 27 september 2026 jadi 250000', 'user_date');
+  console.assert(pastEdit.success && pastEdit.replyText.includes('Rp250.000'), 'Historical edit failed: ' + pastEdit.replyText);
+
+  console.log('Historical date commands: OK');
+
+  console.log('--- 6. Testing Multi-User Data Isolation ---');
   // User A records 30k coffee
   await handleUserMessage('kopi 30rb', 'user_A');
   // User B records 100k book

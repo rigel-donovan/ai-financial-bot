@@ -14,6 +14,19 @@ const mockStore = {
   ] as CategoryMapping[]
 };
 
+function matchesTargetDate(isoStr: string, targetDate: string): boolean {
+  if (!isoStr || !targetDate) return false;
+  if (isoStr.startsWith(targetDate)) return true;
+  try {
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return false;
+    const jakartaDate = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    return jakartaDate === targetDate;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Get Google Sheets API client with service account auth
  */
@@ -344,6 +357,7 @@ export async function deleteTransaction(criteria?: {
   amount?: number;
   query?: string;
   userId?: string;
+  targetDate?: string;
 }): Promise<Transaction | null> {
   const targetUserId = criteria?.userId;
   const client = getSheetsClient();
@@ -355,7 +369,10 @@ export async function deleteTransaction(criteria?: {
       if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
         continue;
       }
-      if (!criteria || (!criteria.amount && !criteria.query)) {
+      if (criteria?.targetDate && !matchesTargetDate(tx.created_at, criteria.targetDate)) {
+        continue;
+      }
+      if (!criteria || (!criteria.amount && !criteria.query && !criteria.targetDate)) {
         return mockStore.transactions.splice(i, 1)[0];
       }
       const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
@@ -395,6 +412,11 @@ export async function deleteTransaction(criteria?: {
 
       const rAmount = parseInt((is9Col ? r[3] : r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
       const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
+      const rowCreatedAt = (is9Col ? r[8] : r[7]) || '';
+
+      if (criteria?.targetDate && !matchesTargetDate(rowCreatedAt, criteria.targetDate)) {
+        continue;
+      }
 
       if (criteria && (criteria.amount || criteria.query)) {
         const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
@@ -494,6 +516,7 @@ export interface EditTransactionOptions {
   newNote?: string;
   newCategory?: string;
   userId?: string;
+  targetDate?: string;
 }
 
 /**
@@ -514,6 +537,9 @@ export async function editTransaction(
     for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
       const tx = mockStore.transactions[i];
       if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
+        continue;
+      }
+      if (opts.targetDate && !matchesTargetDate(tx.created_at, opts.targetDate)) {
         continue;
       }
       if (opts.criteria?.query) {
@@ -563,6 +589,11 @@ export async function editTransaction(
       const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
       const rowUserId = is9Col ? (r[1] || '') : '';
       if (targetUserId && rowUserId && rowUserId !== targetUserId) {
+        continue;
+      }
+
+      const rowCreatedAt = (is9Col ? r[8] : r[7]) || '';
+      if (opts.targetDate && !matchesTargetDate(rowCreatedAt, opts.targetDate)) {
         continue;
       }
 

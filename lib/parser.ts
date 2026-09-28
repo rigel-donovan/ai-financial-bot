@@ -305,6 +305,21 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
 /**
  * Main intent parser
  */
+function extractDateContextFromText(text: string): { targetDate?: string; displayDate?: string } | null {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return null;
+
+  const lower = trimmed.toLowerCase();
+  const hasDateContext = /(?:\b(?:tgl|tanggal)\b|\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?)/i.test(lower);
+  if (!hasDateContext) return null;
+
+  const dateInfo = parseQueryDate(trimmed);
+  return dateInfo.targetDate ? {
+    targetDate: dateInfo.targetDate,
+    displayDate: dateInfo.displayDate
+  } : null;
+}
+
 export function parseMessage(
   rawText: string,
   customCategoryMap?: Record<string, string[]>
@@ -316,6 +331,8 @@ export function parseMessage(
   const cleanPrefix = lower
     .replace(/^(?:tolong\s+|mohon\s+|coba\s+)?(?:buatin\s+|buatkan\s+|tampilin\s+|tampilkan\s+|minta\s+|kasih\s+|kasi\s+|lihat\s+|cek\s+)?/i, '')
     .trim();
+
+  const dateContext = extractDateContextFromText(trimmed);
 
   // 1. Menu / Bantuan / Help / Sapaan
   if (/^(?:menu|bantuan|help|halo|hi|hai|mulai|start|fitur|panduan|cara pakai)$/i.test(lower)) {
@@ -461,6 +478,8 @@ export function parseMessage(
         intent: 'DELETE_LAST',
         amount: deleteAmount,
         note: cleanNote || undefined,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -493,11 +512,14 @@ export function parseMessage(
         .replace(/\b(?:terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
         .trim();
 
+      const targetDate = extractDateContextFromText(targetPart)?.targetDate || dateContext?.targetDate;
       return {
         intent: 'EDIT_LAST',
         amount,
         note: newNote || undefined,
         name: targetQuery || undefined,
+        targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -534,12 +556,16 @@ export function parseMessage(
         intent: 'EDIT_LAST',
         amount,
         note: newNote || undefined,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
 
     return {
       intent: 'EDIT_LAST',
+      targetDate: dateContext?.targetDate,
+      displayDate: dateContext?.displayDate,
       rawMessage: trimmed
     };
   }
@@ -722,6 +748,8 @@ export function parseMessage(
         amount,
         note: cleanNote,
         category,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -784,6 +812,8 @@ export function parseMessage(
         amount,
         note: cleanNote,
         category,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -802,6 +832,8 @@ export function parseMessage(
       amount,
       note: cleanNote,
       category,
+      targetDate: dateContext?.targetDate,
+      displayDate: dateContext?.displayDate,
       rawMessage: trimmed
     };
   }

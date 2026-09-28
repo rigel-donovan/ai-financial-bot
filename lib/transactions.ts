@@ -141,7 +141,7 @@ async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promi
     note: parsed.note || 'Pengeluaran',
     raw_message: parsed.rawMessage,
     source: 'manual',
-    created_at: new Date().toISOString()
+    created_at: resolveTransactionCreatedAt(parsed.targetDate)
   };
 
   await appendTransaction(tx);
@@ -176,7 +176,7 @@ async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promis
     note: parsed.note || 'Pemasukan',
     raw_message: parsed.rawMessage,
     source: 'manual',
-    created_at: new Date().toISOString()
+    created_at: resolveTransactionCreatedAt(parsed.targetDate)
   };
 
   await appendTransaction(tx);
@@ -205,6 +205,13 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveTransactionCreatedAt(targetDate?: string): string {
+  if (!targetDate) return new Date().toISOString();
+  const [year, month, day] = targetDate.split('-').map(Number);
+  if (!year || !month || !day) return new Date().toISOString();
+  return new Date(`${targetDate}T12:00:00+07:00`).toISOString();
 }
 
 /**
@@ -540,7 +547,10 @@ async function handleDeleteLast(parsed?: ParsedIntent, userId?: string): Promise
     userId
   };
 
-  const deleted = await deleteTransaction(criteria);
+  const deleted = await deleteTransaction({
+    ...criteria,
+    targetDate: parsed?.targetDate
+  });
   if (!deleted) {
     return {
       success: false,
@@ -579,11 +589,12 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
   const newCategory = detected && detected !== 'Lainnya' ? detected : undefined;
 
   const result = await editTransaction({
-    criteria: targetQuery ? { query: targetQuery, userId } : undefined,
+    criteria: targetQuery ? { query: targetQuery, userId, targetDate: parsed.targetDate } : { userId, targetDate: parsed.targetDate },
     newAmount: newAmount && newAmount > 0 ? newAmount : undefined,
     newNote,
     newCategory,
-    userId
+    userId,
+    targetDate: parsed.targetDate
   });
 
   if (!result) {
