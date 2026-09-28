@@ -171,6 +171,10 @@ async function runTests() {
     const ocrResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_fallback');
     console.assert(ocrResult.success && ocrResult.transaction?.amount === 100000, 'OCR fallback failed: ' + ocrResult.replyText);
     console.assert(ocrResult.transaction?.category === 'Transport', 'OCR category detection failed: ' + JSON.stringify(ocrResult.transaction));
+    ocrParsedText = 'BESALI CAFE\nSUBTOTAL 277,000';
+    const subtotalResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_subtotal');
+    console.assert(subtotalResult.success && subtotalResult.transaction?.amount === 277000, 'Subtotal fallback failed: ' + subtotalResult.replyText);
+    console.assert(subtotalResult.replyText.includes('nominal dicatat dari subtotal'), 'Subtotal fallback warning missing: ' + subtotalResult.replyText);
     ocrParsedText = 'SPBU PERTAMINA\nBENSIN 100.000';
     const unreadableTotal = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_error');
     console.assert(!unreadableTotal.success && unreadableTotal.replyText.includes('OCR.Space tidak dapat mengenali total pembayaran'), 'OCR fallback error detail missing: ' + unreadableTotal.replyText);

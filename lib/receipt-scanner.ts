@@ -29,6 +29,7 @@ const OCR_SPACE_REQUEST_TIMEOUT_MS = 15_000;
 
 interface ReceiptExtraction {
   total_amount: number;
+  amountSource?: 'total' | 'subtotal';
   merchant: string;
   category?: string;
   items?: string;
@@ -65,6 +66,7 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
 
   const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)\b|\b(?:amount|balance)\s+due\b/i;
   let total = 0;
+  let amountSource: 'total' | 'subtotal' = 'total';
   for (let index = lines.length - 1; index >= 0; index--) {
     if (!totalLabel.test(lines[index])) continue;
     total = extractAmountFromOcrLine(lines[index]);
@@ -72,6 +74,21 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
       total = extractAmountFromOcrLine(lines[index + 1]);
     }
     if (total > 0) break;
+  }
+
+  if (total <= 0) {
+    const subtotalLabel = /\bsub[\s-]?total\b/i;
+    for (let index = lines.length - 1; index >= 0; index--) {
+      if (!subtotalLabel.test(lines[index])) continue;
+      total = extractAmountFromOcrLine(lines[index]);
+      if (!total && lines[index + 1]) {
+        total = extractAmountFromOcrLine(lines[index + 1]);
+      }
+      if (total > 0) {
+        amountSource = 'subtotal';
+        break;
+      }
+    }
   }
 
   if (total <= 0) {
@@ -86,6 +103,7 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
 
   return {
     total_amount: total,
+    amountSource,
     merchant,
     category,
     note: `${merchant} (Scan Struk)`
@@ -339,6 +357,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       `💰 *Total:* ${formatRp(amount)}\n` +
       `🏷️ *Kategori:* ${category}\n` +
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
+      (data.amountSource === 'subtotal' ? '⚠️ Total akhir tidak terlihat; nominal dicatat dari subtotal yang terbaca.\n' : '') +
       `📅 *Tanggal transaksi:* ${transactionDateLabel}\n\n` +
       `✅ _Otomatis dicatat ke Google Sheets Anda!_\n_Atur tanggal lewat caption foto, misalnya: 26 September atau 23 Agustus 2025._`;
 
