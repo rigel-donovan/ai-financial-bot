@@ -18,29 +18,43 @@ const mockStore = {
  * Get Google Sheets API client with service account auth
  */
 function getSheetsClient() {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  const jsonCredentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
-
+  let sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) {
     return null;
   }
 
+  // Strip trailing slashes, whitespace, or extract ID if user pasted full URL
+  sheetId = sheetId.trim();
+  const urlMatch = sheetId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  if (urlMatch) {
+    sheetId = urlMatch[1];
+  } else {
+    sheetId = sheetId.replace(/[/?#].*$/, '').trim();
+  }
+
+  const jsonCredentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+
   let auth;
   if (jsonCredentials) {
     try {
-      const parsed = JSON.parse(jsonCredentials);
+      let trimmed = jsonCredentials.trim();
+      if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+        trimmed = trimmed.slice(1, -1);
+      }
+      const parsed = JSON.parse(trimmed);
       auth = new google.auth.JWT({
         email: parsed.client_email,
         key: parsed.private_key,
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
     } catch (err) {
-      console.error('Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:', err);
-      return null;
+      console.error('Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON, attempting fallback credentials:', err);
     }
-  } else if (clientEmail && privateKey) {
+  }
+
+  if (!auth && clientEmail && privateKey) {
     // Strip surrounding quotes if loaded literally from .env
     let cleanedKey = privateKey.trim();
     if ((cleanedKey.startsWith('"') && cleanedKey.endsWith('"')) || (cleanedKey.startsWith("'") && cleanedKey.endsWith("'"))) {
@@ -53,7 +67,9 @@ function getSheetsClient() {
       key: cleanedKey,
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
     });
-  } else {
+  }
+
+  if (!auth) {
     return null;
   }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   sendWhatsAppTextMessage,
   sendWhatsAppListMessage,
+  sendWhatsAppTemplateMessage,
   markWhatsAppMessageAsRead,
   verifyWhatsAppSignature
 } from '@/lib/whatsapp';
@@ -107,20 +108,29 @@ export async function POST(req: NextRequest) {
     // Process message with transaction business logic
     const result = await handleUserMessage(userText, from);
 
-    // Send WhatsApp reply
-    if (result.interactiveType === 'list' && result.interactiveData) {
-      await sendWhatsAppListMessage(
-        from,
-        result.interactiveData.header,
-        result.interactiveData.body,
-        result.interactiveData.button,
-        result.interactiveData.sections
-      );
-    } else {
-      await sendWhatsAppTextMessage({
-        to: from,
-        body: result.replyText
-      });
+    // Send WhatsApp reply (Try template first to bypass Meta cross-border restriction)
+    const templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'catatan_transaksi';
+    let sent = false;
+
+    if (templateName) {
+      sent = await sendWhatsAppTemplateMessage(from, templateName, result.replyText, 'id');
+    }
+
+    if (!sent) {
+      if (result.interactiveType === 'list' && result.interactiveData) {
+        await sendWhatsAppListMessage(
+          from,
+          result.interactiveData.header,
+          result.interactiveData.body,
+          result.interactiveData.button,
+          result.interactiveData.sections
+        );
+      } else {
+        await sendWhatsAppTextMessage({
+          to: from,
+          body: result.replyText
+        });
+      }
     }
   } catch (err) {
     console.error('Error handling user message:', err);

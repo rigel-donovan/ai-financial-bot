@@ -62,6 +62,67 @@ export async function sendWhatsAppTextMessage({ to, body }: SendMessageOptions):
 }
 
 /**
+ * Send template message via WhatsApp Cloud API (bypasses cross-border session restrictions)
+ */
+export async function sendWhatsAppTemplateMessage(
+  to: string,
+  templateName: string = 'catatan_transaksi',
+  bodyText: string,
+  languageCode: string = 'id'
+): Promise<boolean> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!token || !phoneNumberId) {
+    return false;
+  }
+
+  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                {
+                  type: 'text',
+                  text: bodyText
+                }
+              ]
+            }
+          ]
+        }
+      })
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      console.error('WhatsApp Template send error:', JSON.stringify(errJson));
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('Failed to send WhatsApp template message:', err);
+    return false;
+  }
+}
+
+/**
  * Send interactive List message via WhatsApp Cloud API
  */
 export async function sendWhatsAppListMessage(
