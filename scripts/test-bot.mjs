@@ -60,6 +60,52 @@ async function runTests() {
   const p14 = parseMessage('list pengeluaran dan pemasukan kemarin');
   console.assert(p14.intent === 'LIST_ALL', 'p14 failed: ' + JSON.stringify(p14));
 
+  // Flexible Subscription & Recurring Parsing Tests
+  const p15 = parseMessage('list langganan');
+  console.assert(p15.intent === 'LIST_RECURRING', 'p15 failed: ' + JSON.stringify(p15));
+
+  const p16 = parseMessage('daftar langganan');
+  console.assert(p16.intent === 'LIST_RECURRING', 'p16 failed: ' + JSON.stringify(p16));
+
+  const p17 = parseMessage('cek langganan');
+  console.assert(p17.intent === 'LIST_RECURRING', 'p17 failed: ' + JSON.stringify(p17));
+
+  const p18 = parseMessage('langganan apa aja');
+  console.assert(p18.intent === 'LIST_RECURRING', 'p18 failed: ' + JSON.stringify(p18));
+
+  const p19 = parseMessage('langganan aktif');
+  console.assert(p19.intent === 'LIST_RECURRING', 'p19 failed: ' + JSON.stringify(p19));
+
+  const p20 = parseMessage('tolong cek langganan');
+  console.assert(p20.intent === 'LIST_RECURRING', 'p20 failed: ' + JSON.stringify(p20));
+
+  const p21 = parseMessage('buatin list langganan');
+  console.assert(p21.intent === 'LIST_RECURRING', 'p21 failed: ' + JSON.stringify(p21));
+
+  const p22 = parseMessage('langganan netflix 186k tgl 5');
+  console.assert(p22.intent === 'ADD_RECURRING' && p22.amount === 186000 && p22.dueDate === 5 && p22.name === 'netflix', 'p22 failed: ' + JSON.stringify(p22));
+
+  const p23 = parseMessage('langganan spotify 55rb tiap tgl 25');
+  console.assert(p23.intent === 'ADD_RECURRING' && p23.amount === 55000 && p23.dueDate === 25 && p23.name === 'spotify', 'p23 failed: ' + JSON.stringify(p23));
+
+  const p24 = parseMessage('tambah langganan wifi indihome 350k tgl 20');
+  console.assert(p24.intent === 'ADD_RECURRING' && p24.amount === 350000 && p24.dueDate === 20 && p24.name === 'wifi indihome', 'p24 failed: ' + JSON.stringify(p24));
+
+  const p25 = parseMessage('rutin gym 150k tiap bulan tgl 1');
+  console.assert(p25.intent === 'ADD_RECURRING' && p25.amount === 150000 && p25.dueDate === 1 && p25.name === 'gym', 'p25 failed: ' + JSON.stringify(p25));
+
+  const p26 = parseMessage('stop langganan netflix');
+  console.assert(p26.intent === 'DELETE_RECURRING' && p26.name === 'netflix', 'p26 failed: ' + JSON.stringify(p26));
+
+  const p27 = parseMessage('hapus langganan spotify');
+  console.assert(p27.intent === 'DELETE_RECURRING' && p27.name === 'spotify', 'p27 failed: ' + JSON.stringify(p27));
+
+  const p28 = parseMessage('berhenti langganan youtube');
+  console.assert(p28.intent === 'DELETE_RECURRING' && p28.name === 'youtube', 'p28 failed: ' + JSON.stringify(p28));
+
+  const p29 = parseMessage('cara langganan');
+  console.assert(p29.intent === 'HELP_RECURRING', 'p29 failed: ' + JSON.stringify(p29));
+
   console.log('✓ parseMessage passed!');
 
   console.log('--- 4. Testing End-to-End Business Logic ---');
@@ -102,6 +148,18 @@ async function runTests() {
   const res10 = await handleUserMessage('list pemasukan dan pengeluaran hari ini');
   console.assert(res10.success && res10.replyText.includes('PEMASUKAN') && res10.replyText.includes('PENGELUARAN'), 'res10 failed: ' + res10.replyText);
   console.log('List all (incomes and expenses): OK');
+
+  const res11 = await handleUserMessage('langganan spotify 55rb tiap tgl 25');
+  console.assert(res11.success && res11.replyText.includes('Spotify'), 'res11 failed: ' + res11.replyText);
+  console.log('Add recurring via flexible "langganan": OK');
+
+  const res12 = await handleUserMessage('list langganan');
+  console.assert(res12.success && res12.replyText.includes('Spotify'), 'res12 failed: ' + res12.replyText);
+  console.log('List recurring via "list langganan": OK');
+
+  const res13 = await handleUserMessage('stop langganan spotify');
+  console.assert(res13.success && res13.replyText.includes('Spotify'), 'res13 failed: ' + res13.replyText);
+  console.log('Stop recurring via "stop langganan": OK');
 
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! EVERYTHING WORKS & MAKES SENSE.');
 }

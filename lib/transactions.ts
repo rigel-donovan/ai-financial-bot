@@ -636,7 +636,7 @@ function handleMenu(): ExecutionResult {
     `*AI & Foto Struk:*\n` +
     `• \`saran\` (AI Financial Advisor)\n` +
     `• Kirim langsung *foto struk belanja* 📷\n` +
-    `• \`list rutin\` / \`tambah rutin\``;
+    `• \`list langganan\` / \`tambah langganan\``;
 
   const sections = [
     {
@@ -651,7 +651,7 @@ function handleMenu(): ExecutionResult {
       title: '🤖 Fitur Pintar',
       rows: [
         { id: 'saran', title: 'Saran AI Finansial', description: 'Dapatkan insight hemat dari Gemini AI' },
-        { id: 'list rutin', title: 'Daftar Pengeluaran Rutin', description: 'Lihat tagihan/langganan aktif' }
+        { id: 'list langganan', title: 'Langganan & Tagihan Rutin', description: 'Lihat tagihan & langganan aktif' }
       ]
     },
     {
@@ -703,7 +703,7 @@ async function handleAddRecurring(parsed: ParsedIntent): Promise<ExecutionResult
   if (!parsed.name || !parsed.amount || !parsed.dueDate) {
     return {
       success: false,
-      replyText: '⚠️ Format salah. Contoh: `tambah rutin 150000 netflix tgl 5`'
+      replyText: '⚠️ Format belum lengkap. Contoh: `langganan netflix 186k tgl 5` atau `tambah rutin spotify 55rb tgl 20`'
     };
   }
 
@@ -722,13 +722,13 @@ async function handleAddRecurring(parsed: ParsedIntent): Promise<ExecutionResult
   await addRecurringExpense(item);
 
   const replyText =
-    `🔁 *Pengeluaran Rutin Tersimpan!*\n\n` +
+    `🔁 *Pengeluaran Rutin & Langganan Tersimpan!*\n\n` +
     `• Nama: *${item.name}*\n` +
     `• Jumlah: *${formatRp(item.amount)}*\n` +
     `• Kategori: ${item.category}\n` +
     `• Tanggal Jatuh Tempo: *Tiap tanggal ${item.due_date}*\n` +
     `• Status: *Aktif* ✅\n\n` +
-    `_Bot akan otomatis mencatatnya ke Google Sheets setiap bulan dan mengirim notifikasi WhatsApp._`;
+    `_Bot akan otomatis mencatatnya ke Google Sheets setiap bulan dan mengirim notifikasi._`;
 
   return { success: true, replyText };
 }
@@ -744,10 +744,13 @@ async function handleListRecurring(): Promise<ExecutionResult> {
     return {
       success: true,
       replyText:
-        `📋 *Pengeluaran Rutin Kosong*\n\n` +
-        `Anda belum menambahkan pengeluaran rutin.\n` +
-        `Untuk menambahkan, kirim:\n` +
-        `\`tambah rutin 150000 netflix tgl 5\``
+        `📋 *Pengeluaran Rutin & Langganan Kosong*\n\n` +
+        `Anda belum memiliki daftar langganan atau pengeluaran rutin yang aktif.\n\n` +
+        `💡 *Cara Menambahkan (Bebas & Fleksibel):*\n` +
+        `• \`langganan netflix 186k tgl 5\`\n` +
+        `• \`langganan spotify 55rb tiap tgl 25\`\n` +
+        `• \`tambah langganan wifi indihome 350k tgl 20\`\n` +
+        `• \`rutin gym 150k tgl 1\``
     };
   }
 
@@ -757,10 +760,11 @@ async function handleListRecurring(): Promise<ExecutionResult> {
     .join('\n');
 
   const replyText =
-    `📋 *Daftar Pengeluaran Rutin Aktif:*\n\n` +
+    `📋 *Daftar Pengeluaran Rutin & Langganan Aktif:*\n\n` +
     `${itemsText}\n\n` +
     `💰 *Total Rutin:* *${formatRp(totalMonthly)}* / bulan\n\n` +
-    `_Untuk menonaktifkan, kirim: \`hapus rutin <nama>\`_`;
+    `_• Untuk stop/hapus: ketik \`stop langganan <nama>\` atau \`hapus rutin <nama>\`_\n` +
+    `_• Untuk tambah: ketik \`langganan <nama> <nominal> tgl <hari>\`_`;
 
   return { success: true, replyText };
 }
@@ -772,19 +776,20 @@ async function handleDeleteRecurring(name: string): Promise<ExecutionResult> {
   if (!name) {
     return {
       success: false,
-      replyText: '⚠️ Mohon sebutkan nama pengeluaran rutin. Contoh: `hapus rutin netflix`'
+      replyText: '⚠️ Mohon sebutkan nama langganan / rutin. Contoh: `stop langganan netflix` atau `hapus rutin spotify`'
     };
   }
 
+  const displayName = name.charAt(0).toUpperCase() + name.slice(1);
   const ok = await toggleRecurringExpense(name, false);
   if (!ok) {
     return {
       success: false,
-      replyText: `⚠️ Pengeluaran rutin dengan nama *${name}* tidak ditemukan.`
+      replyText: `⚠️ Langganan / pengeluaran rutin dengan nama *${displayName}* tidak ditemukan.`
     };
   }
 
-  const replyText = `✅ Pengeluaran rutin *${name}* berhasil dinonaktifkan.`;
+  const replyText = `✅ Langganan / pengeluaran rutin *${displayName}* berhasil dinonaktifkan.`;
   return { success: true, replyText };
 }
 
@@ -793,20 +798,22 @@ async function handleDeleteRecurring(name: string): Promise<ExecutionResult> {
  */
 function handleHelpRecurring(): ExecutionResult {
   const replyText =
-    `🔁 *Panduan Pengeluaran Rutin Bulanan*\n\n` +
-    `Jadwalkan tagihan atau langganan rutin bulanan (seperti WiFi, Netflix, Listrik, Kos) agar dicatat otomatis setiap bulan sesuai tanggal jatuh tempo.\n\n` +
-    `📌 *Format Perintah:*\n` +
-    `• \`tambah rutin <jumlah> <nama> tgl <tanggal>\`\n` +
-    `• atau \`tambah rutin <nama> <jumlah> tgl <tanggal>\`\n\n` +
-    `💡 *Contoh:*\n` +
-    `• \`tambah rutin 150rb netflix tgl 5\`\n` +
-    `• \`tambah rutin spotify 55k tgl 20\`\n` +
-    `• \`tambah rutin wifi indihome 350000 tgl 15\`\n` +
+    `🔁 *Panduan Langganan & Pengeluaran Rutin Bulanan*\n\n` +
+    `Jadwalkan tagihan atau langganan rutin (seperti Netflix, Spotify, WiFi, Listrik, Kos, Gym, iCloud) agar dicatat otomatis setiap bulan sesuai tanggal jatuh tempo.\n\n` +
+    `📌 *Format Perintah Cepat & Fleksibel:*\n` +
+    `• \`langganan <nama> <nominal> tgl <tanggal>\`\n` +
+    `• \`tambah langganan <nama> <nominal> tgl <tanggal>\`\n` +
+    `• \`rutin <nama> <nominal> tgl <tanggal>\`\n\n` +
+    `💡 *Contoh Menambah:*\n` +
+    `• \`langganan netflix 186k tgl 5\`\n` +
+    `• \`langganan spotify 55rb tiap tgl 25\`\n` +
+    `• \`tambah langganan wifi indihome 350k tgl 20\`\n` +
+    `• \`rutin gym 150k tiap bulan tgl 1\`\n` +
     `• \`tambah rutin kost 1.5jt tgl 1\`\n\n` +
     `📋 *Perintah Terkait:*\n` +
-    `• \`list rutin\` — Cek daftar rutin aktif\n` +
-    `• \`hapus rutin <nama>\` — Menonaktifkan rutin\n\n` +
-    `_Sistem Vercel Cron akan otomatis mencatatnya tiap bulan dan mengirimkan notifikasi WA ke Anda._`;
+    `• \`list langganan\` / \`cek langganan\` / \`langganan apa aja\` — Cek daftar aktif\n` +
+    `• \`stop langganan <nama>\` / \`hapus rutin <nama>\` — Menonaktifkan langganan\n\n` +
+    `_Sistem akan otomatis mencatatnya tiap bulan ke Google Sheets dan mengirimkan notifikasi ke Anda._`;
 
   return { success: true, replyText };
 }
@@ -815,7 +822,8 @@ function handleHelpRecurring(): ExecutionResult {
  * Handle unknown / help message
  */
 function handleHelp(rawText: string): ExecutionResult {
-  if (rawText.toLowerCase().includes('rutin')) {
+  const lower = (rawText || '').toLowerCase();
+  if (/\b(?:rutin|langganan|subscription|subs)\b/i.test(lower)) {
     return handleHelpRecurring();
   }
 

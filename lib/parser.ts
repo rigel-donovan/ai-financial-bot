@@ -336,8 +336,9 @@ export function parseMessage(
   }
 
   // 3. Query / List / Rekap / Ringkasan / Laporan (Batas luas & mengenali tanggal/periode)
+  const isRecurringWord = /\b(?:rutin|langganan|subscription|subs)(?:ku)?\b/i.test(lower);
   const isQueryOrReport =
-    !lower.includes('rutin') && (
+    !isRecurringWord && (
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(cleanPrefix) ||
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
@@ -432,7 +433,7 @@ export function parseMessage(
 
   // 4. Hapus Terakhir / Undo / Batal
   // Mendukung: "hapus terakhir", "batalin transaksi tadi", "hapus isi bensin 30ribu dari struk tadi", "hapus catatan pengeluaran sebelumnya"
-  if (!lower.startsWith('hapus rutin') && !lower.startsWith('batal rutin') && !lower.startsWith('nonaktif rutin')) {
+  if (!isRecurringWord) {
     const isDeleteWord =
       /^(?:hapus|batal|batalin|cancel|undo|delete|ralat|tolong\s+hapus)\b/i.test(trimmed) ||
       /\b(?:hapus|batal|batalin|cancel|undo)\s+(?:transaksi|catatan|pengeluaran|pemasukan|struk|yang tadi|tadi|sebelumnya)\b/i.test(lower);
@@ -543,22 +544,25 @@ export function parseMessage(
     };
   }
 
-  // 6. Pengeluaran Rutin: List Rutin
-  if (
-    lower === 'list rutin' ||
-    lower === 'daftar rutin' ||
-    lower === 'rutin list' ||
-    lower === 'cek rutin'
-  ) {
+  // 6. Pengeluaran Rutin & Langganan: List
+  // Mendukung: "list langganan", "daftar langganan", "cek langganan", "langganan apa aja", "langganan aktif", "tolong cek langganan", "buatin list langganan", dsb.
+  const isListRecurring =
+    /\b(?:list|daftar|cek|rincian|lihat|tampilkan|tampilin|semua)\s+(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs|tagihan\s+rutin)(?:ku)?\b/i.test(lower) ||
+    /\b(?:rutin|langganan|subscription|subs)(?:ku)?\s+(?:list|daftar|cek|rincian|apa\s+saja|apa\s+aja|aktif)\b/i.test(lower) ||
+    /^(?:langganan|rutin)(?:ku)?(?:\s+(?:saya|gue|gw|ku|apa\s+aja|apa\s+saja))?$/i.test(cleanPrefix);
+
+  if (isListRecurring) {
     return {
       intent: 'LIST_RECURRING',
       rawMessage: trimmed
     };
   }
 
-  // 7. Pengeluaran Rutin: Hapus / Nonaktif Rutin
-  // hapus rutin netflix / nonaktif rutin spotify
-  const delRecurringMatch = trimmed.match(/^(?:hapus\s+rutin|nonaktif\s+rutin|batal\s+rutin)\s+(.+)$/i);
+  // 7. Pengeluaran Rutin & Langganan: Hapus / Stop / Batal / Nonaktif
+  // Mendukung: "stop langganan netflix", "hapus langganan spotify", "berhenti langganan youtube", "batal langganan icloud", "hapus rutin wifi"
+  const delRecurringMatch =
+    trimmed.match(/^(?:hapus|batal|batalin|nonaktif|nonaktifkan|stop|berhenti|cancel|delete)\s+(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs|tagihan\s+rutin)\s+(.+)$/i) ||
+    trimmed.match(/^(?:stop|berhenti)\s+(?:langganan|rutin)\s+(.+)$/i);
   if (delRecurringMatch) {
     const name = delRecurringMatch[1].trim();
     return {
@@ -568,32 +572,28 @@ export function parseMessage(
     };
   }
 
-  // 8. Pengeluaran Rutin: Panduan / Bantuan
-  if (
-    lower === 'tambah rutin' ||
-    lower === 'rutin' ||
-    lower === 'pengeluaran rutin' ||
-    lower === 'cara tambah rutin' ||
-    lower === 'bantuan rutin'
-  ) {
+  // 8. Pengeluaran Rutin & Langganan: Panduan / Bantuan
+  // Mendukung: "cara langganan", "bantuan langganan", "panduan langganan", "info langganan", "rutin help"
+  const isHelpRecurring =
+    /^(?:(?:cara\s+|bantuan\s+|panduan\s+|info\s+)?(?:tambah\s+)?(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs)|(?:rutin|langganan|subscription|subs)\s+(?:cara|bantuan|panduan|info))$/i.test(cleanPrefix) ||
+    /^(?:bantuan\s+langganan|cara\s+langganan|panduan\s+langganan|langganan\s+help|info\s+langganan|cara\s+rutin|bantuan\s+rutin)$/i.test(lower);
+  if (isHelpRecurring) {
     return {
       intent: 'HELP_RECURRING',
       rawMessage: trimmed
     };
   }
 
-  // 9. Pengeluaran Rutin: Tambah Rutin (Fleksibel)
+  // 9. Pengeluaran Rutin & Langganan: Tambah Rutin / Langganan (Fleksibel)
   // Contoh:
+  // - langganan netflix 186k tgl 5
+  // - langganan spotify 55rb tiap tgl 25
+  // - tambah langganan wifi indihome 350k tgl 20
   // - tambah rutin 150000 netflix tgl 5
-  // - tambah rutin 150k spotify tanggal 20
-  // - tambah rutin netflix 150rb tgl 5
-  // - tambah rutin netflix 150k tiap tgl 5
-  // - tambah rutin netflix 150k setiap tgl 5
-  // - tambah rutin netflix 150k tiap bulan tgl 5
-  // - tambah rutin 150k netflix tgl 5 tiap bulan
-  // - rutin netflix 150k tgl 5
+  // - rutin gym 150k tiap bulan tgl 1
+  // - catat langganan icloud 45k tiap bulan tgl 10
   const recurringPrefixMatch = trimmed.match(
-    /^(?:tambah\s+(?:pengeluaran\s+)?rutin|rutin\s+tambah|pengeluaran\s+rutin|rutin)\s+(.+)$/i
+    /^(?:tambah\s+(?:pengeluaran\s+)?(?:rutin|langganan|subscription)|(?:rutin|langganan|subscription)\s+tambah|pengeluaran\s+rutin|catat\s+langganan|pasang\s+langganan|langganan|rutin)\s+(.+)$/i
   );
   if (recurringPrefixMatch) {
     let body = recurringPrefixMatch[1].trim();
@@ -605,7 +605,7 @@ export function parseMessage(
 
     // Strip recurrent frequency words: "tiap bulan", "setiap bulan", "per bulan", "perbulan"
     body = body.replace(/\b(?:tiap|setiap|per)\s*bulan\b/gi, '').trim();
-    body = body.replace(/\bperbulan\b/gi, '').trim();
+    body = body.replace(/\b(?:perbulan|bulanan)\b/gi, '').trim();
 
     // Extract due date: "tgl 5", "tanggal 20", "tiap tgl 5", "setiap tanggal 10"
     const dateMatch = body.match(/(?:\b(?:tiap|setiap)\s+)?(?:tgl|tanggal)\s*(\d{1,2})\b/i);
@@ -634,6 +634,12 @@ export function parseMessage(
         }
       }
     }
+
+    // Jika user menulis "langganan ..." atau "tambah rutin ..." tapi tanggal atau nominal belum lengkap, tampilkan panduan format
+    return {
+      intent: 'HELP_RECURRING',
+      rawMessage: trimmed
+    };
   }
 
   // 10. Catat Pemasukan

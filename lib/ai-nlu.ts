@@ -31,6 +31,10 @@ Analisis pesan berikut dan klasifikasikan maksudnya ke dalam salah satu tipe:
 - "list_all": minta daftar / rincian gabungan pemasukan DAN pengeluaran sekaligus (misal: "list pemasukan dan pengeluaran hari ini", "tampilkan semua transaksi kemarin", "daftar pengeluaran dan pemasukan")
 - "list_expenses": minta daftar / list / rincian pengeluaran (misal: "list pengeluaran hari ini", "daftar pengeluaran kemarin", "rincian pengeluaran tanggal 27 september 2026")
 - "list_incomes": minta daftar / list / rincian pemasukan (misal: "list pemasukan hari ini", "daftar uang masuk kemarin", "rincian pemasukan tanggal 27 september 2026")
+- "list_recurring": minta daftar / cek pengeluaran rutin atau langganan aktif (misal: "list langganan", "langganan apa aja yang aktif", "daftar tagihan rutin", "cek pengeluaran rutin", "mau lihat langganan gue")
+- "add_recurring": menambahkan tagihan atau langganan rutin bulanan baru (misal: "langganan netflix 186rb tiap tgl 5", "tambah langganan spotify 55k tgl 20", "rutin gym 150rb per tgl 1", "pasang langganan wifi indihome 350k tgl 25")
+- "delete_recurring": membatalkan, stop, atau menonaktifkan langganan / rutin (misal: "stop langganan netflix", "hapus langganan spotify", "berhenti langganan youtube", "batal langganan icloud")
+- "help_recurring": menanyakan cara / bantuan terkait langganan atau pengeluaran rutin (misal: "gimana cara langganan", "cara atur langganan", "bantuan langganan")
 - "summary": minta cek rekap, ringkasan, laporan, saldo, atau list semua transaksi pada tanggal/periode tertentu (misal: "rekap tanggal 27 september 2026", "buatin list tanggal 27 september 2026", "laporan hari ini", "cek saldo", "hari ini habis berapa")
 - "expense": mencatat transaksi pengeluaran uang baru (misal: "tadi jajan bakso 15rb", "beli bensin 50k", "abis servis motor 120rb")
 - "income": mencatat uang masuk / pendapatan baru (misal: "dapat transferan 500rb", "gajian 5jt", "dapet arisan 1jt")
@@ -48,13 +52,14 @@ Kategori transaksi umum: Food, Transport, Shopping, Bills, Entertainment, Health
 
 Keluarkan HANYA format JSON valid tanpa tanda backtick atau markdown, dengan struktur:
 {
-  "type": "list_all" | "list_expenses" | "list_incomes" | "summary" | "expense" | "income" | "advice" | "menu" | "delete" | "other",
+  "type": "list_all" | "list_expenses" | "list_incomes" | "list_recurring" | "add_recurring" | "delete_recurring" | "help_recurring" | "summary" | "expense" | "income" | "advice" | "menu" | "delete" | "other",
   "amount": number, // Nominal angka bulat dalam Rupiah (0 jika bukan transaksi baru)
-  "note": "keterangan singkat transaksi (tanpa nominal)",
+  "note": "keterangan singkat transaksi atau nama langganan",
   "category": "kategori yang paling sesuai",
   "period": "day" | "week" | "month", // diisi untuk summary / list_expenses / list_incomes / list_all
   "target_date": "YYYY-MM-DD", // diisi jika user menanyakan tanggal spesifik / kemarin / kemarin lusa, misal "2026-09-27"
-  "display_date": "string tanggal yang mudah dibaca" // cth: "27 September 2026", "Kemarin"
+  "display_date": "string tanggal yang mudah dibaca", // cth: "27 September 2026", "Kemarin"
+  "due_date": number // hari jatuh tempo (1-31) untuk add_recurring
 }`;
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -170,6 +175,43 @@ Keluarkan HANYA format JSON valid tanpa tanda backtick atau markdown, dengan str
       if (parsed.type === 'menu') {
         return {
           intent: 'MENU',
+          rawMessage: trimmed
+        };
+      }
+
+      if (parsed.type === 'list_recurring') {
+        return {
+          intent: 'LIST_RECURRING',
+          rawMessage: trimmed
+        };
+      }
+
+      if (parsed.type === 'help_recurring') {
+        return {
+          intent: 'HELP_RECURRING',
+          rawMessage: trimmed
+        };
+      }
+
+      if (parsed.type === 'delete_recurring') {
+        return {
+          intent: 'DELETE_RECURRING',
+          name: (parsed.note || '').trim(),
+          rawMessage: trimmed
+        };
+      }
+
+      if (parsed.type === 'add_recurring') {
+        const amount = Number(parsed.amount) || 0;
+        const dueDate = Number(parsed.due_date) || 1;
+        const name = (parsed.note || 'Langganan').trim();
+        const category = parsed.category || detectCategory(name, undefined, customCategoryMap);
+        return {
+          intent: 'ADD_RECURRING',
+          amount,
+          name,
+          dueDate,
+          category,
           rawMessage: trimmed
         };
       }
