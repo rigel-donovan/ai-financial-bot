@@ -1,31 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllTransactions, getRecurringExpenses } from '@/lib/sheets';
 
-function csvEscape(value: string | number | boolean | null | undefined): string {
-  const raw = String(value ?? '');
+type Cell = string | number;
+
+function csvEscape(value: Cell): string {
+  let raw = String(value ?? '');
+  // Prevent spreadsheet formula execution in user-defined category names.
+  if (/^[=+@\-\t\r]/.test(raw)) raw = `'${raw}`;
   if (raw.includes(',') || raw.includes('"') || raw.includes('\n') || raw.includes('\r')) {
     return `"${raw.replace(/"/g, '""')}"`;
   }
   return raw;
 }
 
-function buildCsv(rows: Array<Array<string | number | boolean | null | undefined>>): string {
-  return rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+function buildCsv(rows: Cell[][]): string {
+  return rows.map((row) => row.map(csvEscape).join(',')).join('\r\n');
 }
 
-function formatDateForExport(iso?: string): string {
-  if (!iso) return '-';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString('id-ID', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'Asia/Jakarta'
-    });
-  } catch {
-    return iso;
-  }
+function monthKey(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Tanggal tidak diketahui';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit'
+  }).format(date);
+}
+
+function formatMonth(key: string): string {
+  if (!/^\d{4}-\d{2}$/.test(key)) return key;
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('id-ID', {
+    month: 'long', year: 'numeric'
+  });
 }
 
 export async function GET(req: NextRequest) {
@@ -33,7 +38,7 @@ export async function GET(req: NextRequest) {
 
   if (!userId) {
     return NextResponse.json(
-      { error: 'Parameter userId wajib diisi untuk download file spreadsheet privat.' },
+      { error: 'Parameter userId wajib diisi untuk download laporan pribadi.' },
       { status: 400 }
     );
   }
@@ -43,63 +48,64 @@ export async function GET(req: NextRequest) {
     getRecurringExpenses(userId)
   ]);
 
-  const totalIncome = transactions
-    .filter((tx) => tx.type === 'income')
-    .reduce((sum, tx) => sum + tx.amount, 0);
+  const incomes = transactions.filter((tx) => tx.type === 'income');
+  const expenses = transactions.filter((tx) => tx.type === 'expense');
+  const totalIncome = incomes.reduce((sum, tx) => sum + tx.amount, 0);
+  const totalExpense = expenses.reduce((sum, tx) => sum + tx.amount, 0);
+  const activeRecurring = recurring.filter((item) => item.active);
 
-  const totalExpense = transactions
-    .filter((tx) => tx.type === 'expense')
-    .reduce((sum, tx) => sum + tx.amount, 0);
+  const monthly = new Map<string, { income: number; expense: number; count: number }>();
+  const categories = new Map<string, { amount: number; count: number }>();
+  for (const tx of transactions) {
+    const key = monthKey(tx.created_at);
+    const month = monthly.get(key) || { income: 0, expense: 0, count: 0 };
+    month[tx.type] += tx.amount;
+    month.count += 1;
+    monthly.set(key, month);
 
-  const netProfit = totalIncome - totalExpense;
+    if (tx.type === 'expense') {
+      const category = tx.category || 'Lainnya';
+      const total = categories.get(category) || { amount: 0, count: 0 };
+      total.amount += tx.amount;
+      total.count += 1;
+      categories.set(category, total);
+    }
+  }
 
-  const summaryRows = [
-    ['template', 'finance_export'],
-    ['owner_user_id', userId],
-    ['total_pemasukan', totalIncome],
-    ['total_pengeluaran', totalExpense],
-    ['laba_bersih', netProfit],
-    ['jumlah_transaksi', transactions.length],
-    ['jumlah_langganan_aktif', recurring.filter((item) => item.active).length],
-    ['tanggal_export', new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Jakarta' })]
+  const now = new Date();
+  const exportDate = now.toLocaleDateString('id-ID', {
+    day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta'
+  });
+  const reportRows: Cell[][] = [
+    ['LAPORAN KEUANGAN'],
+    ['Dibuat pada', exportDate],
+    [],
+    ['RINGKASAN KESELURUHAN'],
+    ['Metrik', 'Jumlah', 'Transaksi'],
+    ['Total pemasukan', totalIncome, incomes.length],
+    ['Total pengeluaran', totalExpense, expenses.length],
+    ['Laba bersih', totalIncome - totalExpense, transactions.length],
+    ['Pengeluaran rutin aktif', activeRecurring.reduce((sum, item) => sum + item.amount, 0), activeRecurring.length],
+    [],
+    ['REKAP BULANAN'],
+    ['Bulan', 'Pemasukan', 'Pengeluaran', 'Laba bersih', 'Jumlah transaksi'],
+    ...[...monthly.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, values]) => [formatMonth(key), values.income, values.expense, values.income - values.expense, values.count]),
+    [],
+    ['PENGELUARAN PER KATEGORI'],
+    ['Kategori', 'Total pengeluaran', 'Jumlah transaksi', 'Persentase pengeluaran'],
+    ...[...categories.entries()]
+      .sort(([, a], [, b]) => b.amount - a.amount)
+      .map(([category, values]) => [category, values.amount, values.count, totalExpense ? values.amount / totalExpense : 0]),
+    [],
+    ['PENGELUARAN RUTIN'],
+    ['Status', 'Jumlah langganan aktif', 'Total nominal rutin aktif'],
+    ['Aktif', activeRecurring.length, activeRecurring.reduce((sum, item) => sum + item.amount, 0)]
   ];
 
-  const transactionRows = [
-    ['tanggal', 'jenis', 'kategori', 'jumlah', 'keterangan', 'sumber'],
-    ...transactions.map((tx) => [
-      formatDateForExport(tx.created_at),
-      tx.type === 'income' ? 'Pemasukan' : 'Pengeluaran',
-      tx.category,
-      tx.amount,
-      tx.note,
-      tx.source
-    ])
-  ];
-
-  const recurringRows = [
-    ['nama_langganan', 'kategori', 'nominal', 'tanggal_jatuh_tempo', 'status', 'terakhir_berjalan'],
-    ...recurring.map((item) => [
-      item.name,
-      item.category,
-      item.amount,
-      item.due_date,
-      item.active ? 'Aktif' : 'Nonaktif',
-      item.last_run_date || '-'
-    ])
-  ];
-
-  const csv = [
-    '[summary]',
-    buildCsv(summaryRows),
-    '',
-    '[transactions]',
-    buildCsv(transactionRows),
-    '',
-    '[recurring_expenses]',
-    buildCsv(recurringRows)
-  ].join('\n');
-
-  const fileName = `laporan-keuangan-user-${encodeURIComponent(userId)}.csv`;
+  const csv = `\uFEFF${buildCsv(reportRows)}`;
+  const fileName = `laporan-keuangan-${now.toISOString().slice(0, 10)}.csv`;
 
   return new NextResponse(csv, {
     status: 200,
@@ -107,9 +113,8 @@ export async function GET(req: NextRequest) {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="${fileName}"`,
       'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'X-Data-Owner': userId,
-      'X-Privacy-Mode': 'user-scoped-only',
-      'X-Export-Template': 'finance-template-v1'
+      'X-Privacy-Mode': 'aggregated-report-only',
+      'X-Export-Template': 'financial-summary-v2'
     }
   });
 }

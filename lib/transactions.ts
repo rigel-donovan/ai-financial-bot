@@ -949,8 +949,7 @@ Data yang akan diunduh hanya mencakup transaksi milik user ini saja, dan tidak a
 
 👉 Klik tautan berikut untuk mengunduh:
 ${exportUrl}
-
-> File dibuat khusus untuk user: ${userId}`
+`
   };
 }
 
