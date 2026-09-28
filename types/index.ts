@@ -33,6 +33,8 @@ export type IntentType =
   | 'SUMMARY_DAY'
   | 'SUMMARY_WEEK'
   | 'SUMMARY_MONTH'
+  | 'LIST_EXPENSES'
+  | 'LIST_INCOMES'
   | 'DELETE_LAST'
   | 'EDIT_LAST'
   | 'MENU'
@@ -53,6 +55,8 @@ export interface ParsedIntent {
   dueDate?: number; // for recurring
   name?: string; // for recurring
   period?: 'day' | 'week' | 'month';
+  targetDate?: string; // YYYY-MM-DD for date-filtered queries
+  displayDate?: string; // e.g. "27 September 2026", "Kemarin"
 }
 
 export interface ExecutionResult {

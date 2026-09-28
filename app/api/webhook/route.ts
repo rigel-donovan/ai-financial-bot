@@ -7,6 +7,7 @@ import {
   verifyWhatsAppSignature
 } from '@/lib/whatsapp';
 import { handleUserMessage } from '@/lib/transactions';
+import { scanReceiptImage } from '@/lib/receipt-scanner';
 
 /**
  * GET: Webhook verification challenge from WhatsApp Cloud API
@@ -84,6 +85,53 @@ export async function POST(req: NextRequest) {
         body: '🔒 *Akses Ditolak*\nNomor ini tidak terdaftar untuk mengakses bot pengeluaran pribadi ini.'
       });
       return NextResponse.json({ status: 'ok' }, { status: 200 });
+    }
+  }
+
+  // Check if message is an image (receipt photo)
+  if (message.type === 'image' && message.image?.id) {
+    const token = process.env.WHATSAPP_ACCESS_TOKEN;
+    if (token) {
+      try {
+        const mediaId = message.image.id;
+        const mimeType = message.image.mime_type || 'image/jpeg';
+
+        // 1. Get media direct download URL from Meta Graph API
+        const metaRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const metaJson = await metaRes.json();
+
+        if (metaJson.url) {
+          // 2. Download media binary bytes
+          const imgRes = await fetch(metaJson.url, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const arrayBuffer = await imgRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+
+          // 3. Scan receipt with Gemini Vision & auto-record to Google Sheets
+          const scanResult = await scanReceiptImage(buffer, mimeType);
+
+          // 4. Send reply
+          const templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'catatan_transaksi';
+          let sent = false;
+          if (templateName) {
+            sent = await sendWhatsAppTemplateMessage(from, templateName, scanResult.replyText, 'id');
+          }
+          if (!sent) {
+            await sendWhatsAppTextMessage({ to: from, body: scanResult.replyText });
+          }
+          return NextResponse.json({ status: 'ok' }, { status: 200 });
+        }
+      } catch (imgErr) {
+        console.error('Error processing WhatsApp receipt image:', imgErr);
+        await sendWhatsAppTextMessage({
+          to: from,
+          body: '⚠️ Terjadi kendala saat membaca foto struk. Pastikan foto jelas dan coba kirim ulang.'
+        });
+        return NextResponse.json({ status: 'ok' }, { status: 200 });
+      }
     }
   }
 

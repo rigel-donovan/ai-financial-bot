@@ -17,7 +17,10 @@ import {
   ArrowRight,
   Database,
   Smartphone,
-  Cpu
+  Cpu,
+  Camera,
+  ImagePlus,
+  Receipt
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -46,6 +49,61 @@ export default function Home() {
   ]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleUploadReceipt(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      const time = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'user',
+        text: `📸 *[Mengirim Foto Struk: ${file.name}]*`,
+        timestamp: time
+      };
+
+      setMessages(prev => [...prev, userMsg]);
+      setLoading(true);
+
+      try {
+        const res = await fetch('/api/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: base64,
+            mimeType: file.type || 'image/jpeg'
+          })
+        });
+        const data = await res.json();
+        const botReply = data.result?.replyText || '⚠️ Tidak ada respons dari sistem AI.';
+        const botMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          sender: 'bot',
+          text: botReply,
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+        };
+        setMessages(prev => [...prev, botMsg]);
+      } catch {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'bot',
+            text: '❌ Terjadi kesalahan saat menganalisis foto struk.',
+            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+      } finally {
+        setLoading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsDataURL(file);
+  }
 
   useEffect(() => {
     fetchStatus();
@@ -276,6 +334,15 @@ export default function Home() {
                 </p>
 
                 <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={loading}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 transition active:scale-95 flex items-center gap-1.5 font-medium disabled:opacity-50"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                    📸 Scan Foto Struk AI
+                  </button>
+
                   {quickCommands.map((cmd) => (
                     <button
                       key={cmd}
@@ -451,10 +518,27 @@ export default function Home() {
                   className="bg-[#202c33] p-3 border-t border-[#2a3942] flex items-center gap-2"
                 >
                   <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleUploadReceipt}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={loading}
+                    title="Upload / Foto Struk"
+                    className="w-10 h-10 rounded-xl bg-[#2a3942] hover:bg-[#374248] text-slate-300 hover:text-emerald-400 flex items-center justify-center transition disabled:opacity-50"
+                  >
+                    <Camera className="w-5 h-5" />
+                  </button>
+
+                  <input
                     type="text"
                     value={inputMessage}
                     onChange={(e) => setInputMessage(e.target.value)}
-                    placeholder="Ketik misal: keluar 25000 kopi, ringkasan bulan, saran..."
+                    placeholder="Ketik pengeluaran atau upload foto struk..."
                     className="flex-1 bg-[#2a3942] text-white placeholder-[#8696a0] text-sm px-4 py-2.5 rounded-xl border border-transparent focus:border-emerald-500 focus:outline-none transition"
                   />
                   <button

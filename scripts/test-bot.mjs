@@ -41,6 +41,19 @@ async function runTests() {
   const p8 = parseMessage('menu');
   console.assert(p8.intent === 'MENU', 'p8 failed');
 
+  // Test Date-filtered queries
+  const p9 = parseMessage('list pemasukan tanggal 27 september 2026');
+  console.assert(p9.intent === 'LIST_INCOMES' && p9.targetDate === '2026-09-27', 'p9 failed: ' + JSON.stringify(p9));
+
+  const p10 = parseMessage('buatin list tanggal 27 september 2026');
+  console.assert(p10.intent === 'SUMMARY_DAY' && p10.targetDate === '2026-09-27', 'p10 failed: ' + JSON.stringify(p10));
+
+  const p11 = parseMessage('list pengeluaran kemarin');
+  console.assert(p11.intent === 'LIST_EXPENSES' && p11.targetDate, 'p11 failed: ' + JSON.stringify(p11));
+
+  const p12 = parseMessage('27 september 2026 beli tiket 500rb');
+  console.assert(p12.intent === 'RECORD_EXPENSE' && p12.amount === 500000, 'p12 failed: ' + JSON.stringify(p12));
+
   console.log('✓ parseMessage passed!');
 
   console.log('--- 4. Testing End-to-End Business Logic ---');
@@ -71,6 +84,14 @@ async function runTests() {
   const res7 = await handleUserMessage('hapus terakhir');
   console.assert(res7.success && res7.replyText.includes('Dibatalkan'), 'res7 failed');
   console.log('Delete last: OK');
+
+  const res8 = await handleUserMessage('list pemasukan tanggal 27 september 2026');
+  console.assert(res8.success && res8.replyText.includes('27 September 2026'), 'res8 failed: ' + res8.replyText);
+  console.log('List incomes by date: OK');
+
+  const res9 = await handleUserMessage('buatin list tanggal 27 september 2026');
+  console.assert(res9.success && res9.replyText.includes('27 September 2026'), 'res9 failed: ' + res9.replyText);
+  console.log('Summary list by date: OK');
 
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! EVERYTHING WORKS & MAKES SENSE.');
 }

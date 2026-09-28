@@ -237,13 +237,48 @@ export async function getAllTransactions(): Promise<Transaction[]> {
 }
 
 /**
- * Delete the latest transaction
+ * Delete a transaction (either by matching criteria or the latest one)
  */
-export async function deleteLatestTransaction(): Promise<Transaction | null> {
+export async function deleteTransaction(criteria?: {
+  amount?: number;
+  query?: string;
+}): Promise<Transaction | null> {
   const client = getSheetsClient();
   if (!client) {
     if (mockStore.transactions.length === 0) return null;
-    return mockStore.transactions.pop() || null;
+    if (!criteria || (!criteria.amount && !criteria.query)) {
+      return mockStore.transactions.pop() || null;
+    }
+    // 1. Dual match: amount & query
+    if (criteria.amount && criteria.query) {
+      const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        const tx = mockStore.transactions[i];
+        const text = `${tx.category} ${tx.note} ${tx.raw_message}`.toLowerCase();
+        if (tx.amount === criteria.amount && words.some((w) => text.includes(w))) {
+          return mockStore.transactions.splice(i, 1)[0];
+        }
+      }
+    }
+    // 2. Match by amount
+    if (criteria.amount) {
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        if (mockStore.transactions[i].amount === criteria.amount) {
+          return mockStore.transactions.splice(i, 1)[0];
+        }
+      }
+    }
+    // 3. Match by query
+    if (criteria.query) {
+      const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        const text = `${mockStore.transactions[i].category} ${mockStore.transactions[i].note} ${mockStore.transactions[i].raw_message}`.toLowerCase();
+        if (words.some((w) => text.includes(w))) {
+          return mockStore.transactions.splice(i, 1)[0];
+        }
+      }
+    }
+    return null;
   }
 
   const { sheets, sheetId } = client;
@@ -256,44 +291,158 @@ export async function deleteLatestTransaction(): Promise<Transaction | null> {
     const rows = res.data.values || [];
     if (rows.length === 0) return null;
 
-    const lastRowIndex = rows.length + 1; // 1-indexed (row 1 is header)
-    const lastRow = rows[rows.length - 1];
+    let targetIdx = -1;
 
+    if (criteria && (criteria.amount || criteria.query)) {
+      // 1. Dual match: amount & query
+      if (criteria.amount && criteria.query) {
+        const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const r = rows[i];
+          const rAmount = parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
+          const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
+          if (rAmount === criteria.amount && words.some((w) => text.includes(w))) {
+            targetIdx = i;
+            break;
+          }
+        }
+      }
+
+      // 2. Match by amount
+      if (targetIdx === -1 && criteria.amount) {
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const r = rows[i];
+          const rAmount = parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
+          if (rAmount === criteria.amount) {
+            targetIdx = i;
+            break;
+          }
+        }
+      }
+
+      // 3. Match by query
+      if (targetIdx === -1 && criteria.query) {
+        const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const r = rows[i];
+          const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
+          if (words.some((w) => text.includes(w))) {
+            targetIdx = i;
+            break;
+          }
+        }
+      }
+
+      // If user provided a specific search and no match found, do NOT delete an arbitrary row!
+      if (targetIdx === -1) {
+        return null;
+      }
+    } else {
+      // No criteria specified (e.g. "hapus terakhir" / "undo") -> delete the last row
+      targetIdx = rows.length - 1;
+    }
+
+    const rowToDelete = rows[targetIdx];
     const deleted: Transaction = {
-      id: lastRow[0] || '',
-      type: (lastRow[1] as any) || 'expense',
-      amount: parseInt((lastRow[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: lastRow[3] || '',
-      note: lastRow[4] || '',
-      raw_message: lastRow[5] || '',
-      source: (lastRow[6] as any) || 'manual',
-      created_at: lastRow[7] || ''
+      id: rowToDelete[0] || '',
+      type: (rowToDelete[1] as any) || 'expense',
+      amount: parseInt((rowToDelete[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+      category: rowToDelete[3] || '',
+      note: rowToDelete[4] || '',
+      raw_message: rowToDelete[5] || '',
+      source: (rowToDelete[6] as any) || 'manual',
+      created_at: rowToDelete[7] || ''
     };
 
-    // Clear the last row
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: sheetId,
-      range: `transactions!A${lastRowIndex}:H${lastRowIndex}`
-    });
+    // If deleting the last row, clearing that row is fastest
+    if (targetIdx === rows.length - 1) {
+      const lastRowIndex = rows.length + 1;
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: sheetId,
+        range: `transactions!A${lastRowIndex}:H${lastRowIndex}`
+      });
+    } else {
+      // Remove from array and rewrite transactions!A2:H
+      rows.splice(targetIdx, 1);
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: sheetId,
+        range: 'transactions!A2:H'
+      });
+      if (rows.length > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: 'transactions!A2',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: rows }
+        });
+      }
+    }
 
     return deleted;
   } catch (err) {
-    console.error('Error deleting latest transaction:', err);
+    console.error('Error deleting transaction:', err);
     return null;
   }
 }
 
 /**
- * Edit the latest transaction amount
+ * Delete the latest transaction (convenience alias)
  */
-export async function editLatestTransactionAmount(newAmount: number): Promise<{ previous: Transaction; updated: Transaction } | null> {
+export async function deleteLatestTransaction(): Promise<Transaction | null> {
+  return deleteTransaction();
+}
+
+export interface EditTransactionOptions {
+  criteria?: {
+    query?: string;
+  };
+  newAmount?: number;
+  newNote?: string;
+  newCategory?: string;
+}
+
+/**
+ * Edit a transaction (amount, note, or category)
+ */
+export async function editTransaction(
+  options: EditTransactionOptions | number
+): Promise<{ previous: Transaction; updated: Transaction } | null> {
+  const opts: EditTransactionOptions =
+    typeof options === 'number' ? { newAmount: options } : options;
+
   const client = getSheetsClient();
   if (!client) {
     if (mockStore.transactions.length === 0) return null;
-    const last = mockStore.transactions[mockStore.transactions.length - 1];
-    const prev = { ...last };
-    last.amount = newAmount;
-    return { previous: prev, updated: last };
+    let targetIdx = -1;
+    if (opts.criteria?.query) {
+      const q = opts.criteria.query.toLowerCase();
+      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+        const tx = mockStore.transactions[i];
+        if (
+          tx.note.toLowerCase().includes(q) ||
+          tx.category.toLowerCase().includes(q) ||
+          tx.raw_message.toLowerCase().includes(q)
+        ) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) return null;
+    } else {
+      targetIdx = mockStore.transactions.length - 1;
+    }
+
+    const prev = { ...mockStore.transactions[targetIdx] };
+    if (opts.newAmount !== undefined && opts.newAmount > 0) {
+      mockStore.transactions[targetIdx].amount = opts.newAmount;
+    }
+    if (opts.newNote) {
+      mockStore.transactions[targetIdx].note = opts.newNote;
+      if (opts.newCategory) {
+        mockStore.transactions[targetIdx].category = opts.newCategory;
+      }
+    }
+    return { previous: prev, updated: mockStore.transactions[targetIdx] };
   }
 
   const { sheets, sheetId } = client;
@@ -306,35 +455,80 @@ export async function editLatestTransactionAmount(newAmount: number): Promise<{ 
     const rows = res.data.values || [];
     if (rows.length === 0) return null;
 
-    const lastRowIndex = rows.length + 1;
-    const lastRow = rows[rows.length - 1];
+    let targetIdx = -1;
 
+    if (opts.criteria?.query) {
+      const q = opts.criteria.query.toLowerCase();
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
+        if (text.includes(q)) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) {
+        return null;
+      }
+    } else {
+      targetIdx = rows.length - 1; // default to latest row
+    }
+
+    const row = rows[targetIdx];
     const previous: Transaction = {
-      id: lastRow[0] || '',
-      type: (lastRow[1] as any) || 'expense',
-      amount: parseInt((lastRow[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: lastRow[3] || '',
-      note: lastRow[4] || '',
-      raw_message: lastRow[5] || '',
-      source: (lastRow[6] as any) || 'manual',
-      created_at: lastRow[7] || ''
+      id: row[0] || '',
+      type: (row[1] as any) || 'expense',
+      amount: parseInt((row[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+      category: row[3] || '',
+      note: row[4] || '',
+      raw_message: row[5] || '',
+      source: (row[6] as any) || 'manual',
+      created_at: row[7] || ''
     };
 
+    const updatedAmount =
+      opts.newAmount !== undefined && opts.newAmount > 0 ? opts.newAmount : previous.amount;
+    const updatedNote = opts.newNote !== undefined && opts.newNote ? opts.newNote : previous.note;
+    const updatedCategory =
+      opts.newCategory !== undefined && opts.newCategory
+        ? opts.newCategory
+        : previous.type === 'income' && (!previous.category || previous.category === 'Lainnya')
+        ? 'Income'
+        : previous.category;
+
+    const targetRowIndex = targetIdx + 2; // 1-indexed, +1 header
+
+    // Update columns C (amount), D (category), E (note)
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
-      range: `transactions!C${lastRowIndex}`,
+      range: `transactions!C${targetRowIndex}:E${targetRowIndex}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [[newAmount]]
+        values: [[updatedAmount, updatedCategory, updatedNote]]
       }
     });
 
-    const updated = { ...previous, amount: newAmount };
+    const updated: Transaction = {
+      ...previous,
+      amount: updatedAmount,
+      note: updatedNote,
+      category: updatedCategory
+    };
+
     return { previous, updated };
   } catch (err) {
-    console.error('Error editing latest transaction:', err);
+    console.error('Error editing transaction:', err);
     return null;
   }
+}
+
+/**
+ * Edit the latest transaction amount (convenience alias)
+ */
+export async function editLatestTransactionAmount(
+  newAmount: number
+): Promise<{ previous: Transaction; updated: Transaction } | null> {
+  return editTransaction(newAmount);
 }
 
 /**

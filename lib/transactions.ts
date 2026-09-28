@@ -5,11 +5,14 @@ import {
   ParsedIntent,
   ExecutionResult
 } from '@/types';
-import { parseMessage } from './parser';
+import { parseMessage, detectCategory } from './parser';
+import { parseNaturalLanguageWithAI } from './ai-nlu';
 import {
   appendTransaction,
   getAllTransactions,
+  deleteTransaction,
   deleteLatestTransaction,
+  editTransaction,
   editLatestTransactionAmount,
   getRecurringExpenses,
   addRecurringExpense,
@@ -52,7 +55,19 @@ export async function handleUserMessage(
   _senderPhone?: string
 ): Promise<ExecutionResult> {
   const categoryMap = await getCategoryMappings();
-  const parsed: ParsedIntent = parseMessage(rawText, categoryMap);
+  let parsed: ParsedIntent = parseMessage(rawText, categoryMap);
+
+  // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali
+  if (parsed.intent === 'UNKNOWN' && process.env.GEMINI_API_KEY) {
+    try {
+      const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap);
+      if (aiParsed && aiParsed.intent !== 'UNKNOWN') {
+        parsed = aiParsed;
+      }
+    } catch (err: any) {
+      console.warn('[handleUserMessage] AI NLU fallback warning:', err?.message || err);
+    }
+  }
 
   switch (parsed.intent) {
     case 'RECORD_EXPENSE':
@@ -64,13 +79,19 @@ export async function handleUserMessage(
     case 'SUMMARY_DAY':
     case 'SUMMARY_WEEK':
     case 'SUMMARY_MONTH':
-      return await handleSummary(parsed.period || 'month');
+      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate);
+
+    case 'LIST_EXPENSES':
+      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate);
+
+    case 'LIST_INCOMES':
+      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate);
 
     case 'DELETE_LAST':
-      return await handleDeleteLast();
+      return await handleDeleteLast(parsed);
 
     case 'EDIT_LAST':
-      return await handleEditLast(parsed.amount || 0);
+      return await handleEditLast(parsed);
 
     case 'MENU':
       return handleMenu();
@@ -104,7 +125,7 @@ async function handleRecordExpense(parsed: ParsedIntent): Promise<ExecutionResul
   if (!parsed.amount) {
     return {
       success: false,
-      replyText: '⚠️ Jumlah pengeluaran tidak valid. Contoh: `keluar 25000 makan siang`'
+      replyText: '⚠️ Jumlah pengeluaran tidak terbaca. Contoh: `kopi 25rb` atau `beli bensin 50k`'
     };
   }
 
@@ -166,37 +187,63 @@ async function handleRecordIncome(parsed: ParsedIntent): Promise<ExecutionResult
 }
 
 /**
- * Handle summary reports (day, week, month)
+ * Check if an ISO date string matches a target date string (YYYY-MM-DD) in Asia/Jakarta timezone
  */
-async function handleSummary(period: 'day' | 'week' | 'month'): Promise<ExecutionResult> {
+function matchesTargetDate(isoStr: string, targetDate: string): boolean {
+  if (!isoStr || !targetDate) return false;
+  if (isoStr.startsWith(targetDate)) return true;
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return false;
+    const jakartaDate = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    return jakartaDate === targetDate;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Handle summary reports (day, week, month) or specific target date
+ */
+async function handleSummary(
+  period: 'day' | 'week' | 'month',
+  targetDate?: string,
+  displayDate?: string
+): Promise<ExecutionResult> {
   const transactions = await getAllTransactions();
   const now = new Date();
 
-  let startDate: Date;
+  let filtered: Transaction[];
   let titlePeriod = '';
 
-  if (period === 'day') {
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    titlePeriod = `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
-  } else if (period === 'week') {
-    // Start of week (Monday)
-    const day = now.getDay() || 7;
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
-    titlePeriod = `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+  if (targetDate) {
+    titlePeriod = displayDate || targetDate;
+    filtered = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
   } else {
-    // Month
-    startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-    titlePeriod = `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
-  }
-
-  const filtered = transactions.filter(t => {
-    try {
-      const txDate = new Date(t.created_at);
-      return txDate >= startDate && txDate <= now;
-    } catch {
-      return false;
+    let startDate: Date;
+    if (period === 'day') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else if (period === 'week') {
+      // Start of week (Monday)
+      const day = now.getDay() || 7;
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else {
+      // Month
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
     }
-  });
+
+    filtered = transactions.filter(t => {
+      try {
+        const txDate = new Date(t.created_at);
+        return txDate >= startDate && txDate <= now;
+      } catch {
+        return false;
+      }
+    });
+  }
 
   const expenses = filtered.filter(t => t.type === 'expense');
   const incomes = filtered.filter(t => t.type === 'income');
@@ -219,26 +266,40 @@ async function handleSummary(period: 'day' | 'week' | 'month'): Promise<Executio
     })
     .join('\n');
 
-  // Top 3 recent transactions
-  const recentLines = filtered
-    .slice(-3)
-    .reverse()
-    .map(t => `• ${t.type === 'expense' ? '🔴' : '🟢'} ${formatRp(t.amount)} — ${t.note || t.category}`)
+  // Transactions list
+  const itemsList = targetDate ? filtered : filtered.slice(-3).reverse();
+  const recentLines = itemsList
+    .map((t, idx) => {
+      let timeStr = '';
+      try {
+        const d = new Date(t.created_at);
+        timeStr = d.toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Jakarta'
+        });
+      } catch {
+        timeStr = '';
+      }
+      const timeTag = timeStr ? ` (${timeStr})` : '';
+      const prefix = targetDate ? `${idx + 1}. ` : '• ';
+      return `${prefix}${t.type === 'expense' ? '🔴' : '🟢'} ${formatRp(t.amount)} — ${t.note || t.category}${timeTag}`;
+    })
     .join('\n');
 
   let replyText =
-    `📊 *Ringkasan Pengeluaran ${titlePeriod}*\n\n` +
-    `🔴 Total Pengeluaran: *${formatRp(totalExpense)}*\n` +
-    `🟢 Total Pemasukan: *${formatRp(totalIncome)}*\n` +
+    `📊 *Ringkasan Transaksi — ${titlePeriod}*\n\n` +
+    `🔴 Total Pengeluaran: *${formatRp(totalExpense)}* (${expenses.length})\n` +
+    `🟢 Total Pemasukan: *${formatRp(totalIncome)}* (${incomes.length})\n` +
     `📈 Tabungan Bersih: *${formatRp(netSavings)}*\n` +
     `📝 Total Transaksi: *${filtered.length}*\n\n`;
 
   if (categoryLines) {
-    replyText += `*Rincian Per Kategori:*\n${categoryLines}\n\n`;
+    replyText += `*Rincian Pengeluaran Per Kategori:*\n${categoryLines}\n\n`;
   }
 
   if (recentLines) {
-    replyText += `*Transaksi Terkini:*\n${recentLines}`;
+    replyText += targetDate ? `*Daftar Transaksi:*\n${recentLines}` : `*Transaksi Terkini:*\n${recentLines}`;
   } else {
     replyText += `_Belum ada transaksi di periode ini._`;
   }
@@ -247,19 +308,129 @@ async function handleSummary(period: 'day' | 'week' | 'month'): Promise<Executio
 }
 
 /**
+ * Handle dedicated full transaction list for expenses or incomes
+ */
+async function handleListTransactions(
+  type: 'expense' | 'income',
+  period: 'day' | 'week' | 'month',
+  targetDate?: string,
+  displayDate?: string
+): Promise<ExecutionResult> {
+  const transactions = await getAllTransactions();
+  const now = new Date();
+
+  let titlePeriod = '';
+  let inRange: Transaction[];
+
+  if (targetDate) {
+    titlePeriod = displayDate || targetDate;
+    inRange = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+  } else {
+    let startDate: Date;
+    if (period === 'day') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })})`;
+    } else if (period === 'week') {
+      const day = now.getDay() || 7;
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
+    }
+
+    inRange = transactions.filter((t) => {
+      try {
+        const txDate = new Date(t.created_at);
+        return txDate >= startDate && txDate <= now;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  // Filter exclusively by transaction type
+  const list = inRange.filter((t) => t.type === type);
+  const isExpense = type === 'expense';
+  const typeLabel = isExpense ? 'Pengeluaran' : 'Pemasukan';
+  const emoji = isExpense ? '🔴' : '🟢';
+
+  if (list.length === 0) {
+    const emptyReply =
+      `📋 *Daftar Lengkap ${typeLabel} — ${titlePeriod}*\n\n` +
+      `_Belum ada catatan ${typeLabel.toLowerCase()} di periode ini._\n\n` +
+      `💡 Ketik pesan santai seperti \`${isExpense ? 'beli kopi 25rb' : 'dapat transferan 500rb'}\` untuk mencatat transaksi baru.`;
+    return { success: true, replyText: emptyReply };
+  }
+
+  const totalAmount = list.reduce((sum, t) => sum + t.amount, 0);
+
+  // Group by category for subtotal
+  const categoryTotals: Record<string, number> = {};
+  for (const t of list) {
+    categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+  }
+
+  // Format each line
+  const itemsText = list
+    .map((t, idx) => {
+      let timeStr = '';
+      try {
+        const d = new Date(t.created_at);
+        timeStr = d.toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Jakarta'
+        });
+      } catch {
+        timeStr = '';
+      }
+      const timeTag = timeStr ? ` (${timeStr})` : '';
+      const noteStr = t.note || t.category;
+      return `${idx + 1}. ${emoji} *${formatRp(t.amount)}* — ${noteStr} _[${t.category}]_${timeTag}`;
+    })
+    .join('\n');
+
+  // Breakdown lines
+  const catLines = Object.entries(categoryTotals)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cat, amt]) => `• ${cat}: *${formatRp(amt)}*`)
+    .join('\n');
+
+  let replyText =
+    `📋 *Daftar Lengkap ${typeLabel} — ${titlePeriod}*\n\n` +
+    itemsText +
+    `\n\n━━━━━━━━━━━━━━━━━━\n` +
+    `💰 *Total ${typeLabel}:* *${formatRp(totalAmount)}* (${list.length} transaksi)\n`;
+
+  if (Object.keys(categoryTotals).length > 1) {
+    replyText += `\n🏷️ *Rincian Kategori:*\n${catLines}`;
+  }
+
+  return { success: true, replyText };
+}
+
+/**
  * Handle delete last transaction
  */
-async function handleDeleteLast(): Promise<ExecutionResult> {
-  const deleted = await deleteLatestTransaction();
+async function handleDeleteLast(parsed?: ParsedIntent): Promise<ExecutionResult> {
+  const criteria = parsed
+    ? {
+        amount: parsed.amount,
+        query: parsed.note
+      }
+    : undefined;
+
+  const deleted = await deleteTransaction(criteria);
   if (!deleted) {
     return {
       success: false,
-      replyText: '⚠️ Tidak ada transaksi terakhir yang dapat dihapus.'
+      replyText: '⚠️ Tidak ada transaksi yang sesuai atau dapat dihapus.'
     };
   }
 
   const replyText =
-    `🗑️ *Transaksi Terakhir Dibatalkan*\n\n` +
+    `🗑️ *Transaksi Berhasil Dibatalkan/Dihapus!*\n\n` +
     `• Jenis: ${deleted.type === 'expense' ? 'Pengeluaran' : 'Pemasukan'}\n` +
     `• Jumlah: ${formatRp(deleted.amount)}\n` +
     `• Keterangan: ${deleted.note || deleted.category}\n` +
@@ -272,28 +443,57 @@ async function handleDeleteLast(): Promise<ExecutionResult> {
 /**
  * Handle edit last transaction amount
  */
-async function handleEditLast(newAmount: number): Promise<ExecutionResult> {
-  if (newAmount <= 0) {
+async function handleEditLast(parsed: ParsedIntent): Promise<ExecutionResult> {
+  const newAmount = parsed.amount;
+  const newNote = parsed.note;
+  const targetQuery = parsed.name;
+
+  if ((!newAmount || newAmount <= 0) && !newNote) {
     return {
       success: false,
-      replyText: '⚠️ Format salah. Contoh: `edit terakhir 30000`'
+      replyText: '⚠️ Berikan nominal atau keterangan baru. Contoh: `edit jadi 35k` atau `edit bensin jadi 40k`'
     };
   }
 
-  const result = await editLatestTransactionAmount(newAmount);
+  const categoryMap = await getCategoryMappings();
+  const detected = newNote ? detectCategory(newNote, undefined, categoryMap) : undefined;
+  const newCategory = detected && detected !== 'Lainnya' ? detected : undefined;
+
+  const result = await editTransaction({
+    criteria: targetQuery ? { query: targetQuery } : undefined,
+    newAmount: newAmount && newAmount > 0 ? newAmount : undefined,
+    newNote,
+    newCategory
+  });
+
   if (!result) {
     return {
       success: false,
-      replyText: '⚠️ Tidak ada transaksi terakhir yang dapat diubah.'
+      replyText: targetQuery
+        ? `⚠️ Tidak ditemukan transaksi yang cocok dengan "${targetQuery}".`
+        : '⚠️ Tidak ada transaksi yang dapat diubah.'
     };
   }
 
+  let changesText = '';
+  if (result.previous.amount !== result.updated.amount) {
+    changesText += `• Jumlah: ${formatRp(result.previous.amount)} ➔ *${formatRp(result.updated.amount)}* 🎯\n`;
+  } else {
+    changesText += `• Jumlah: *${formatRp(result.updated.amount)}*\n`;
+  }
+
+  if (result.previous.note !== result.updated.note) {
+    changesText += `• Keterangan: "${result.previous.note}" ➔ *"${result.updated.note}"*\n`;
+  } else {
+    changesText += `• Keterangan: *${result.updated.note || result.updated.category}*\n`;
+  }
+
+  changesText += `• Kategori: ${result.updated.category}\n`;
+
   const replyText =
-    `✏️ *Transaksi Terakhir Diperbarui!*\n\n` +
-    `• Keterangan: ${result.updated.note || result.updated.category}\n` +
-    `• Jumlah Sebelumnya: ${formatRp(result.previous.amount)}\n` +
-    `• Jumlah Baru: *${formatRp(result.updated.amount)}* 🎯\n\n` +
-    `_Perubahan telah disimpan ke Google Sheets._`;
+    `✏️ *Transaksi Berhasil Diperbarui!*\n\n` +
+    changesText +
+    `\n_Perubahan telah disimpan ke Google Sheets._`;
 
   return { success: true, replyText };
 }
@@ -304,19 +504,23 @@ async function handleEditLast(newAmount: number): Promise<ExecutionResult> {
 function handleMenu(): ExecutionResult {
   const headerText = '🤖 Expense Bot Menu';
   const bodyText =
-    `Pilih perintah cepat atau ketik langsung di chat:\n\n` +
-    `*Catat Transaksi:*\n` +
-    `• \`keluar 25000 kopi susu\`\n` +
-    `• \`masuk 5000000 gaji\`\n\n` +
-    `*Laporan:*\n` +
-    `• \`ringkasan hari\`\n` +
-    `• \`ringkasan minggu\`\n` +
-    `• \`ringkasan bulan\`\n\n` +
+    `Pilih perintah cepat atau ketik santai di chat (bebas format):\n\n` +
+    `*Catat Transaksi Santai:*\n` +
+    `• \`beli kopi 25rb\` / \`kopi 20k\`\n` +
+    `• \`beli bensin 50k\` / \`bensin 50rb\`\n` +
+    `• \`makan siang nasi padang 25.000\`\n` +
+    `• \`bayar listrik 150 ribu\`\n` +
+    `• \`dapet gaji 5jt\` / \`transferan 500rb\`\n\n` +
+    `*Laporan & Saldo:*\n` +
+    `• \`pengeluaran hari ini\` / \`rekap hari\`\n` +
+    `• \`rekap minggu ini\`\n` +
+    `• \`saldo sekarang\` / \`laporan bulan ini\`\n\n` +
     `*Koreksi:*\n` +
-    `• \`hapus terakhir\`\n` +
+    `• \`hapus terakhir\` / \`batal\`\n` +
     `• \`edit terakhir <jumlah>\`\n\n` +
-    `*AI & Rutin:*\n` +
-    `• \`saran\` (AI Advisor)\n` +
+    `*AI & Foto Struk:*\n` +
+    `• \`saran\` (AI Financial Advisor)\n` +
+    `• Kirim langsung *foto struk belanja* 📷\n` +
     `• \`list rutin\` / \`tambah rutin\``;
 
   const sections = [
@@ -501,16 +705,24 @@ function handleHelp(rawText: string): ExecutionResult {
   }
 
   const replyText =
-    `🤔 *Format pesan belum dikenali:* "${rawText}"\n\n` +
-    `*Contoh format yang didukung:*\n` +
-    `• Catat Pengeluaran: \`keluar 25000 makan siang\`\n` +
-    `• Catat Pemasukan: \`masuk 5000000 gaji\`\n` +
-    `• Ringkasan: \`ringkasan hari\` / \`minggu\` / \`bulan\`\n` +
-    `• Batalkan Transaksi: \`hapus terakhir\`\n` +
-    `• Ubah Jumlah: \`edit terakhir 30000\`\n` +
-    `• AI Financial Advisor: \`saran\`\n` +
-    `• Pengeluaran Rutin: \`tambah rutin 150k netflix tgl 5\`\n` +
-    `• Menu Pilihan: \`menu\``;
+    `👋 *Format Pesan Bebas & Santai (Tanpa Format Kaku)*\n\n` +
+    `Anda bisa langsung mencatat pengeluaran atau pemasukan dengan bahasa sehari-hari:\n\n` +
+    `💡 *Contoh Catat Pengeluaran:*\n` +
+    `• \`beli kopi 25rb\` atau \`kopi 20k\`\n` +
+    `• \`bensin 50k\` atau \`beli bensin 50.000\`\n` +
+    `• \`makan siang nasi padang 25rb\`\n` +
+    `• \`bayar listrik 150 ribu\`\n` +
+    `• \`parkir motor 2000\`\n\n` +
+    `💰 *Contoh Catat Pemasukan:*\n` +
+    `• \`gajian 5.000.000\`\n` +
+    `• \`dapat transferan 500rb\`\n` +
+    `• \`bonus 250k\`\n\n` +
+    `📊 *Cek Rekap & Saldo:*\n` +
+    `• \`pengeluaran hari ini\` atau \`rekap minggu ini\`\n` +
+    `• \`saldo sekarang\` atau \`laporan bulan ini\`\n\n` +
+    `📷 *Scan Struk:*\n` +
+    `Langsung kirim foto struk belanja Anda ke bot ini!\n\n` +
+    `Ketik \`menu\` untuk melihat opsi lainnya.`;
 
   return { success: false, replyText };
 }
