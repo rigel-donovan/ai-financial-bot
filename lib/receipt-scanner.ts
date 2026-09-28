@@ -57,16 +57,17 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 `.trim();
 
   const candidateModels = [
-    'gemini-flash-latest',
+    'gemini-3.8-flash',
     'gemini-3.5-flash',
     'gemini-3.5-flash-lite',
-    'gemini-3.8-flash'
+    'gemini-flash-latest'
   ];
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const base64Data = imageBuffer.toString('base64');
   let rawJsonText = '';
   let lastError: any = null;
+  const modelErrors: Array<{ model: string; status?: number; message: string }> = [];
 
   for (const modelName of candidateModels) {
     try {
@@ -83,23 +84,36 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       rawJsonText = result.response.text().trim();
       if (rawJsonText) break;
     } catch (err: any) {
-      console.warn(`[ReceiptScanner] Model ${modelName} failed:`, err.message);
+      const status = Number(err?.status || err?.statusCode || err?.response?.status) || undefined;
+      const message = String(err?.message || err || 'Unknown Gemini API error');
+      console.warn(`[ReceiptScanner] Model ${modelName} failed (HTTP ${status || 'unknown'}):`, message);
+      modelErrors.push({ model: modelName, status, message });
       lastError = err;
     }
   }
 
   if (!rawJsonText) {
-    console.error('[ReceiptScanner] All vision models failed:', lastError);
+    console.error('[ReceiptScanner] All vision models failed:', modelErrors);
+    const errorText = modelErrors.map((error) => `${error.status || ''} ${error.message}`).join(' ').toLowerCase();
+    let failureHelp = 'Layanan AI gagal memproses gambar. Silakan coba lagi beberapa saat.';
+
+    if (/\b429\b|resource_exhausted|quota|rate.?limit/i.test(errorText)) {
+      failureHelp = 'Batas kuota atau laju permintaan Gemini tercapai (429). Periksa kuota Gemini API di Google AI Studio atau coba lagi setelah batasnya pulih.';
+    } else if (/\b402\b|prepayment|billing|payment required/i.test(errorText)) {
+      failureHelp = 'Akun Gemini API memerlukan pemeriksaan billing atau saldo prabayar. Periksa status billing project di Google AI Studio.';
+    } else if (/\b401\b|\b403\b|api.?key|permission_denied|unauthenticated/i.test(errorText)) {
+      failureHelp = 'Gemini API menolak kredensial. Periksa apakah GEMINI_API_KEY valid dan project memiliki akses ke Gemini API.';
+    } else if (/\b404\b|model_not_found|not found/i.test(errorText)) {
+      failureHelp = 'Model Gemini yang tersedia untuk project ini tidak ditemukan. Periksa akses model atau nama model pada konfigurasi scanner.';
+    } else if (/\b503\b|\b504\b|unavailable|deadline_exceeded|timeout/i.test(errorText)) {
+      failureHelp = 'Layanan Gemini sedang sibuk atau melewati batas waktu. Coba kirim foto struk lagi sebentar lagi.';
+    }
+
     return {
       success: false,
-      replyText:
-        '⚠️ *Gagal Menganalisis Struk*\n\n' +
-        (lastError?.message?.includes('402') || lastError?.message?.includes('prepayment')
-          ? 'Quota Gemini AI memerlukan API key gratis tanpa batasan saldo. Silakan periksa kredensial Gemini Anda di Google AI Studio.'
-          : 'Foto struk tidak jelas atau sistem AI sedang sibuk. Pastikan foto struk memiliki pencahayaan cukup dan nominal total terlihat jelas.')
+      replyText: `⚠️ *Gagal Menganalisis Struk*\n\n${failureHelp}${lastError ? `\n\nKode error terakhir: ${lastError.status || lastError.statusCode || 'tidak tersedia'}.` : ''}`
     };
   }
-
   console.log('[ReceiptScanner] Gemini Vision Output:', rawJsonText);
 
   try {
