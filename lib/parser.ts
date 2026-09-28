@@ -130,6 +130,8 @@ const MONTH_NAMES: Record<string, number> = {
 export interface QueryDateResult {
   period: 'day' | 'week' | 'month';
   targetDate?: string; // YYYY-MM-DD
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
   displayDate?: string;
 }
 
@@ -148,6 +150,61 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
   const pad = (n: number) => String(n).padStart(2, '0');
   const formatDisplay = (d: Date) =>
     d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const toDateStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  const parseMonthDayYear = (day: number, monthName: string, year?: number) => {
+    const month = MONTH_NAMES[monthName.toLowerCase()];
+    if (month === undefined) return null;
+    const resolvedYear = year ?? now.getFullYear();
+    return new Date(resolvedYear, month, day);
+  };
+
+  const rangeMatch = lower.match(/(?:\b(?:tgl|tanggal)\s+)?(\d{1,2})\s*(?:-|–|—|sampai|sd)\s*(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?/i);
+  if (rangeMatch) {
+    const startDay = parseInt(rangeMatch[1], 10);
+    const endDay = parseInt(rangeMatch[2], 10);
+    const monthName = rangeMatch[3].toLowerCase();
+    const year = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : now.getFullYear();
+    const monthIndex = MONTH_NAMES[monthName];
+    if (startDay >= 1 && startDay <= 31 && endDay >= 1 && endDay <= 31 && monthIndex !== undefined) {
+      let start = new Date(year, monthIndex, startDay);
+      let end = new Date(year, monthIndex, endDay);
+      if (end < start) {
+        const tmp = start;
+        start = end;
+        end = tmp;
+      }
+      return {
+        period: 'day',
+        startDate: toDateStr(start),
+        endDate: toDateStr(end),
+        displayDate: `${formatDisplay(start)} - ${formatDisplay(end)}`
+      };
+    }
+  }
+
+  const rangeMonthNameMatch = lower.match(/(?:\b(?:tgl|tanggal)\s+)?(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?\s*(?:-|–|—|sampai|sd)\s*(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?/i);
+  if (rangeMonthNameMatch) {
+    const startDay = parseInt(rangeMonthNameMatch[1], 10);
+    const startMonth = rangeMonthNameMatch[2].toLowerCase();
+    const startYear = rangeMonthNameMatch[3] ? parseInt(rangeMonthNameMatch[3], 10) : now.getFullYear();
+    const endDay = parseInt(rangeMonthNameMatch[4], 10);
+    const endMonth = rangeMonthNameMatch[5].toLowerCase();
+    const endYear = rangeMonthNameMatch[6] ? parseInt(rangeMonthNameMatch[6], 10) : now.getFullYear();
+    const startParsed = parseMonthDayYear(startDay, startMonth, startYear);
+    const endParsed = parseMonthDayYear(endDay, endMonth, endYear);
+    if (startParsed && endParsed) {
+      const start = startParsed < endParsed ? startParsed : endParsed;
+      const end = startParsed < endParsed ? endParsed : startParsed;
+      return {
+        period: 'day',
+        startDate: toDateStr(start),
+        endDate: toDateStr(end),
+        displayDate: `${formatDisplay(start)} - ${formatDisplay(end)}`
+      };
+    }
+  }
 
   // 1. "kemarin lusa"
   if (/\bkemarin\s+lusa\b/i.test(lower)) {
@@ -239,29 +296,46 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
 
   // 7. "minggu ini" / "minggu lalu"
   if (/\bminggu\s+lalu\b/i.test(lower)) {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7) - 6, 0, 0, 0);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
     return {
       period: 'week',
-      displayDate: 'Minggu Lalu'
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `Minggu Lalu (${start.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${end.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`
     };
   }
   if (/\b(?:minggu(?:\s+ini)?|week)\b/i.test(lower)) {
+    const day = now.getDay() || 7;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
     return {
       period: 'week',
-      displayDate: 'Minggu Ini'
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `Minggu Ini (${start.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${end.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`
     };
   }
 
   // 8. "bulan ini" / "bulan lalu"
   if (/\bbulan\s+lalu\b/i.test(lower)) {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
     return {
       period: 'month',
-      displayDate: 'Bulan Lalu'
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `Bulan Lalu (${start.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`
     };
   }
   if (/\b(?:bulan(?:\s+ini)?|month)\b/i.test(lower)) {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     return {
       period: 'month',
-      displayDate: 'Bulan Ini'
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `Bulan Ini (${start.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`
     };
   }
 
@@ -305,15 +379,22 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
 /**
  * Main intent parser
  */
-function extractDateContextFromText(text: string): { targetDate?: string; displayDate?: string } | null {
+function extractDateContextFromText(text: string): { targetDate?: string; startDate?: string; endDate?: string; displayDate?: string } | null {
   const trimmed = (text || '').trim();
   if (!trimmed) return null;
 
   const lower = trimmed.toLowerCase();
-  const hasDateContext = /(?:\b(?:tgl|tanggal)\b|\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?)/i.test(lower);
+  const hasDateContext = /(?:\b(?:tgl|tanggal)\b|\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?|\d{1,2}\s*(?:-|–|—|sampai|sd)\s*\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec))/i.test(lower);
   if (!hasDateContext) return null;
 
   const dateInfo = parseQueryDate(trimmed);
+  if (dateInfo.startDate && dateInfo.endDate) {
+    return {
+      startDate: dateInfo.startDate,
+      endDate: dateInfo.endDate,
+      displayDate: dateInfo.displayDate
+    };
+  }
   return dateInfo.targetDate ? {
     targetDate: dateInfo.targetDate,
     displayDate: dateInfo.displayDate
@@ -379,6 +460,8 @@ export function parseMessage(
         intent: 'LIST_ALL',
         period: dateInfo.period,
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -389,6 +472,8 @@ export function parseMessage(
         intent: 'LIST_ALL',
         period: dateInfo.period,
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -401,6 +486,8 @@ export function parseMessage(
         intent: 'LIST_INCOMES',
         period: dateInfo.period,
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -413,6 +500,8 @@ export function parseMessage(
         intent: 'LIST_EXPENSES',
         period: dateInfo.period,
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -425,6 +514,8 @@ export function parseMessage(
         intent: 'SUMMARY_WEEK',
         period: 'week',
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -434,6 +525,8 @@ export function parseMessage(
         intent: 'SUMMARY_MONTH',
         period: 'month',
         targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         rawMessage: trimmed
       };
@@ -443,6 +536,8 @@ export function parseMessage(
       intent: 'SUMMARY_DAY',
       period: 'day',
       targetDate: dateInfo.targetDate,
+      startDate: dateInfo.startDate,
+      endDate: dateInfo.endDate,
       displayDate: dateInfo.displayDate,
       rawMessage: trimmed
     };
@@ -512,14 +607,16 @@ export function parseMessage(
         .replace(/\b(?:terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
         .trim();
 
-      const targetDate = extractDateContextFromText(targetPart)?.targetDate || dateContext?.targetDate;
+      const dateInfo = extractDateContextFromText(targetPart) || dateContext;
       return {
         intent: 'EDIT_LAST',
         amount,
         note: newNote || undefined,
         name: targetQuery || undefined,
-        targetDate,
-        displayDate: dateContext?.displayDate,
+        targetDate: dateInfo?.targetDate,
+        startDate: dateInfo?.startDate,
+        endDate: dateInfo?.endDate,
+        displayDate: dateInfo?.displayDate,
         rawMessage: trimmed
       };
     }

@@ -58,7 +58,9 @@ export interface ParsedIntent {
   dueDate?: number; // for recurring
   name?: string; // for recurring
   period?: 'day' | 'week' | 'month';
-  targetDate?: string; // YYYY-MM-DD for date-filtered queries
+  targetDate?: string; // YYYY-MM-DD for single-day queries
+  startDate?: string; // YYYY-MM-DD for ranges
+  endDate?: string; // YYYY-MM-DD for ranges
   displayDate?: string; // e.g. "27 September 2026", "Kemarin"
 }
 

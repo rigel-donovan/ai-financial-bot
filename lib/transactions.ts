@@ -47,6 +47,30 @@ export function formatDate(isoStr: string): string {
   }
 }
 
+function formatDateLabel(date?: string): string {
+  if (!date) return 'Tanggal tidak ditentukan';
+  try {
+    const d = new Date(date);
+    return d.toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'Asia/Jakarta'
+    });
+  } catch {
+    return date;
+  }
+}
+
+function formatDateRangeLabel(startDate?: string, endDate?: string, fallback?: string): string {
+  if (startDate && endDate && startDate !== endDate) {
+    return `${formatDateLabel(startDate)} - ${formatDateLabel(endDate)}`;
+  }
+  if (startDate) return formatDateLabel(startDate);
+  if (endDate) return formatDateLabel(endDate);
+  return fallback || 'periode ini';
+}
+
 /**
  * Main coordinator to handle incoming user chat message
  */
@@ -79,16 +103,16 @@ export async function handleUserMessage(
     case 'SUMMARY_DAY':
     case 'SUMMARY_WEEK':
     case 'SUMMARY_MONTH':
-      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate, userId);
+      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
 
     case 'LIST_EXPENSES':
-      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
+      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
 
     case 'LIST_INCOMES':
-      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
+      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
 
     case 'LIST_ALL':
-      return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
+      return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
 
     case 'DELETE_LAST':
       return await handleDeleteLast(parsed, userId);
@@ -146,11 +170,16 @@ async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promi
 
   await appendTransaction(tx);
 
+  const dateLine = parsed.targetDate
+    ? `📅 *Tanggal:* ${formatDateLabel(parsed.targetDate)}\n`
+    : '';
+
   const replyText =
     `✅ *Pengeluaran Dicatat!*\n\n` +
     `💰 *Jumlah:* ${formatRp(tx.amount)}\n` +
     `🏷️ *Kategori:* ${tx.category}\n` +
     `📝 *Catatan:* ${tx.note}\n` +
+    `${dateLine}` +
     `📅 *Waktu:* ${formatDate(tx.created_at)}`;
 
   return { success: true, replyText };
@@ -181,11 +210,16 @@ async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promis
 
   await appendTransaction(tx);
 
+  const dateLine = parsed.targetDate
+    ? `📅 *Tanggal:* ${formatDateLabel(parsed.targetDate)}\n`
+    : '';
+
   const replyText =
     `✅ *Pemasukan Dicatat!*\n\n` +
     `💵 *Jumlah:* ${formatRp(tx.amount)}\n` +
     `🏷️ *Kategori:* ${tx.category}\n` +
     `📝 *Catatan:* ${tx.note}\n` +
+    `${dateLine}` +
     `📅 *Waktu:* ${formatDate(tx.created_at)}`;
 
   return { success: true, replyText };
@@ -207,6 +241,20 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
   }
 }
 
+function matchesDateRange(isoStr: string, startDate?: string, endDate?: string): boolean {
+  if (!isoStr || !startDate || !endDate) return false;
+  try {
+    const txDate = new Date(isoStr);
+    if (isNaN(txDate.getTime())) return false;
+    const txMs = txDate.getTime();
+    const startMs = new Date(`${startDate}T00:00:00+07:00`).getTime();
+    const endMs = new Date(`${endDate}T23:59:59+07:00`).getTime();
+    return txMs >= startMs && txMs <= endMs;
+  } catch {
+    return false;
+  }
+}
+
 function resolveTransactionCreatedAt(targetDate?: string): string {
   if (!targetDate) return new Date().toISOString();
   const [year, month, day] = targetDate.split('-').map(Number);
@@ -221,7 +269,9 @@ async function handleSummary(
   period: 'day' | 'week' | 'month',
   targetDate?: string,
   displayDate?: string,
-  userId?: string
+  userId?: string,
+  startDate?: string,
+  endDate?: string
 ): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
   const now = new Date();
@@ -230,8 +280,11 @@ async function handleSummary(
   let titlePeriod = '';
 
   if (targetDate) {
-    titlePeriod = displayDate || targetDate;
+    titlePeriod = displayDate || formatDateLabel(targetDate);
     filtered = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+  } else if (startDate && endDate) {
+    titlePeriod = displayDate || formatDateRangeLabel(startDate, endDate, `${startDate} - ${endDate}`);
+    filtered = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
   } else {
     let startDate: Date;
     if (period === 'day') {
@@ -328,7 +381,9 @@ async function handleListTransactions(
   period: 'day' | 'week' | 'month',
   targetDate?: string,
   displayDate?: string,
-  userId?: string
+  userId?: string,
+  startDate?: string,
+  endDate?: string
 ): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
   const now = new Date();
@@ -339,6 +394,9 @@ async function handleListTransactions(
   if (targetDate) {
     titlePeriod = displayDate || targetDate;
     inRange = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+  } else if (startDate && endDate) {
+    titlePeriod = displayDate || `${startDate} - ${endDate}`;
+    inRange = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
   } else {
     let startDate: Date;
     if (period === 'day') {
@@ -431,7 +489,9 @@ async function handleListAllTransactions(
   period: 'day' | 'week' | 'month',
   targetDate?: string,
   displayDate?: string,
-  userId?: string
+  userId?: string,
+  startDate?: string,
+  endDate?: string
 ): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
   const now = new Date();
@@ -442,6 +502,9 @@ async function handleListAllTransactions(
   if (targetDate) {
     titlePeriod = displayDate || targetDate;
     inRange = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+  } else if (startDate && endDate) {
+    titlePeriod = displayDate || `${startDate} - ${endDate}`;
+    inRange = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
   } else {
     let startDate: Date;
     if (period === 'day') {
@@ -552,18 +615,24 @@ async function handleDeleteLast(parsed?: ParsedIntent, userId?: string): Promise
     targetDate: parsed?.targetDate
   });
   if (!deleted) {
+    const dateInfo = parsed?.targetDate || parsed?.startDate ? ` pada ${formatDateRangeLabel(parsed?.startDate, parsed?.endDate, parsed?.targetDate)}` : '';
     return {
       success: false,
-      replyText: '⚠️ Tidak ada transaksi yang sesuai atau dapat dihapus.'
+      replyText: `⚠️ Tidak ada transaksi yang sesuai atau dapat dihapus${dateInfo}.`
     };
   }
+
+  const dateText = deleted.created_at
+    ? `📅 *Tanggal:* ${formatDateLabel(deleted.created_at)}\n`
+    : '';
 
   const replyText =
     `🗑️ *Transaksi Berhasil Dibatalkan/Dihapus!*\n\n` +
     `• Jenis: ${deleted.type === 'expense' ? 'Pengeluaran' : 'Pemasukan'}\n` +
     `• Jumlah: ${formatRp(deleted.amount)}\n` +
     `• Keterangan: ${deleted.note || deleted.category}\n` +
-    `• Kategori: ${deleted.category}\n\n` +
+    `• Kategori: ${deleted.category}\n` +
+    `${dateText}\n` +
     `_Data telah dihapus dari Google Sheets._`;
 
   return { success: true, replyText };
@@ -598,11 +667,12 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
   });
 
   if (!result) {
+    const dateInfo = parsed.targetDate || parsed.startDate ? ` pada ${formatDateRangeLabel(parsed.startDate, parsed.endDate, parsed.targetDate)}` : '';
     return {
       success: false,
       replyText: targetQuery
-        ? `⚠️ Tidak ditemukan transaksi yang cocok dengan "${targetQuery}".`
-        : '⚠️ Tidak ada transaksi yang dapat diubah.'
+        ? `⚠️ Tidak ditemukan transaksi yang cocok dengan "${targetQuery}"${dateInfo}.`
+        : `⚠️ Tidak ada transaksi yang dapat diubah${dateInfo}.`
     };
   }
 
@@ -621,10 +691,15 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
 
   changesText += `• Kategori: ${result.updated.category}\n`;
 
+  const targetDateLabel = result.updated.created_at
+    ? `📅 *Tanggal:* ${formatDateLabel(result.updated.created_at)}\n`
+    : '';
+
   const replyText =
     `✏️ *Transaksi Berhasil Diperbarui!*\n\n` +
     changesText +
-    `\n_Perubahan telah disimpan ke Google Sheets._`;
+    `${targetDateLabel}\n` +
+    `_Perubahan telah disimpan ke Google Sheets._`;
 
   return { success: true, replyText };
 }

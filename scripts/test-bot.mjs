@@ -60,6 +60,15 @@ async function runTests() {
   const p14 = parseMessage('list pengeluaran dan pemasukan kemarin');
   console.assert(p14.intent === 'LIST_ALL', 'p14 failed: ' + JSON.stringify(p14));
 
+  const p14b = parseMessage('list pemasukan dan pengeluaran 27 - 28 september');
+  console.assert(p14b.intent === 'LIST_ALL' && p14b.targetDate === '2026-09-27' && p14b.endDate === '2026-09-28', 'p14b failed: ' + JSON.stringify(p14b));
+
+  const p14c = parseMessage('list pemasukan dan pengeluaran bulan ini');
+  console.assert(p14c.intent === 'LIST_ALL' && p14c.period === 'month' && p14c.startDate && p14c.endDate, 'p14c failed: ' + JSON.stringify(p14c));
+
+  const p14d = parseMessage('list penyusutan minggu ini');
+  console.assert(p14d.intent === 'LIST_ALL' && p14d.period === 'week' && p14d.startDate && p14d.endDate, 'p14d failed: ' + JSON.stringify(p14d));
+
   // Flexible Subscription & Recurring Parsing Tests
   const p15 = parseMessage('list langganan');
   console.assert(p15.intent === 'LIST_RECURRING', 'p15 failed: ' + JSON.stringify(p15));
@@ -149,6 +158,17 @@ async function runTests() {
   console.assert(res10.success && res10.replyText.includes('PEMASUKAN') && res10.replyText.includes('PENGELUARAN'), 'res10 failed: ' + res10.replyText);
   console.log('List all (incomes and expenses): OK');
 
+  const rangeA = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_range');
+  const rangeB = await handleUserMessage('28 september 2026 makan siang 30rb', 'user_range');
+  console.assert(rangeA.success && rangeB.success, 'range record failed');
+  const rangeList = await handleUserMessage('list pemasukan dan pengeluaran 27 - 28 september', 'user_range');
+  console.assert(rangeList.success && rangeList.replyText.includes('27 September 2026') && rangeList.replyText.includes('Rp45.000') && rangeList.replyText.includes('Rp30.000'), 'range list failed: ' + rangeList.replyText);
+  console.log('Date range list: OK');
+
+  const historicalDelete = await handleUserMessage('hapus transaksi 27 september 2026', 'user_range');
+  console.assert(historicalDelete.success && historicalDelete.replyText.includes('Tanggal: 27 September 2026'), 'historical delete output failed: ' + historicalDelete.replyText);
+  console.log('Historical delete output: OK');
+
   const res11 = await handleUserMessage('langganan spotify 55rb tiap tgl 25');
   console.assert(res11.success && res11.replyText.includes('Spotify'), 'res11 failed: ' + res11.replyText);
   console.log('Add recurring via flexible "langganan": OK');
@@ -160,6 +180,18 @@ async function runTests() {
   const res13 = await handleUserMessage('stop langganan spotify');
   console.assert(res13.success && res13.replyText.includes('Spotify'), 'res13 failed: ' + res13.replyText);
   console.log('Stop recurring via "stop langganan": OK');
+
+  const historicalDeleteOutput = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_output_delete');
+  console.assert(historicalDeleteOutput.success, 'historical delete setup failed: ' + historicalDeleteOutput.replyText);
+  const deleteOutput = await handleUserMessage('hapus transaksi 27 september 2026', 'user_output_delete');
+  console.assert(deleteOutput.success && deleteOutput.replyText.includes('27 September 2026'), 'historical delete output missing date label: ' + deleteOutput.replyText);
+  console.log('Historical delete output with date label: OK');
+
+  const historicalEditOutput = await handleUserMessage('27 september 2026 masuk 200000 freelance', 'user_output_edit');
+  console.assert(historicalEditOutput.success, 'historical edit setup failed: ' + historicalEditOutput.replyText);
+  const editOutput = await handleUserMessage('edit 27 september 2026 jadi 250000', 'user_output_edit');
+  console.assert(editOutput.success && editOutput.replyText.includes('27 September 2026'), 'historical edit output missing date label: ' + editOutput.replyText);
+  console.log('Historical edit output with date label: OK');
 
   console.log('--- 5. Testing Historical Date Transaction Commands ---');
   const pastExpense = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_date');
