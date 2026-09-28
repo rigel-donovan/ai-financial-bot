@@ -26,41 +26,62 @@ export async function parseNaturalLanguageWithAI(
   const now = new Date();
   const todayStr = now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  const prompt = `Kamu adalah AI parser pesan transaksi keuangan untuk bot pengelola keuangan di Indonesia.
-Analisis pesan berikut dan klasifikasikan maksudnya ke dalam salah satu tipe:
-- "list_all": minta daftar / rincian gabungan pemasukan DAN pengeluaran sekaligus (misal: "list pemasukan dan pengeluaran hari ini", "tampilkan semua transaksi kemarin", "daftar pengeluaran dan pemasukan")
-- "list_expenses": minta daftar / list / rincian pengeluaran (misal: "list pengeluaran hari ini", "daftar pengeluaran kemarin", "rincian pengeluaran tanggal 27 september 2026")
-- "list_incomes": minta daftar / list / rincian pemasukan (misal: "list pemasukan hari ini", "daftar uang masuk kemarin", "rincian pemasukan tanggal 27 september 2026")
-- "list_recurring": minta daftar / cek pengeluaran rutin atau langganan aktif (misal: "list langganan", "langganan apa aja yang aktif", "daftar tagihan rutin", "cek pengeluaran rutin", "mau lihat langganan gue")
-- "add_recurring": menambahkan tagihan atau langganan rutin bulanan baru (misal: "langganan netflix 186rb tiap tgl 5", "tambah langganan spotify 55k tgl 20", "rutin gym 150rb per tgl 1", "pasang langganan wifi indihome 350k tgl 25")
-- "delete_recurring": membatalkan, stop, atau menonaktifkan langganan / rutin (misal: "stop langganan netflix", "hapus langganan spotify", "berhenti langganan youtube", "batal langganan icloud")
-- "help_recurring": menanyakan cara / bantuan terkait langganan atau pengeluaran rutin (misal: "gimana cara langganan", "cara atur langganan", "bantuan langganan")
-- "summary": minta cek rekap, ringkasan, laporan, saldo, atau list semua transaksi pada tanggal/periode tertentu (misal: "rekap tanggal 27 september 2026", "buatin list tanggal 27 september 2026", "laporan hari ini", "cek saldo", "hari ini habis berapa")
-- "expense": mencatat transaksi pengeluaran uang baru (misal: "tadi jajan bakso 15rb", "beli bensin 50k", "abis servis motor 120rb")
-- "income": mencatat uang masuk / pendapatan baru (misal: "dapat transferan 500rb", "gajian 5jt", "dapet arisan 1jt")
-- "advice": minta tips hemat atau analisa keuangan (misal: "keuangan gue gimana ya", "minta saran hemat")
-- "menu": minta panduan fitur / menu / bantuan
-- "delete": membatalkan atau menghapus catatan transaksi (misal: "hapus transaksi tadi", "batalin yang 30rb", "hapus catatan pengeluaran sebelumnya")
-- "other": obrolan umum di luar keuangan
+  const prompt = `Kamu adalah AI parser cerdas untuk bot catatan keuangan Indonesia.
+Tujuanmu adalah membaca maksud pengguna dengan sangat fleksibel, akurat, dan natural, tanpa terpaku pada pola yang terlalu kaku. Fokus utamanya adalah konteks transaksi keuangan: pemasukan, pengeluaran, laporan, saldo, langganan, dan koreksi transaksi.
 
-PENTING: JANGAN PERNAH mengklasifikasikan pesan yang meminta 'list', 'daftar', 'rincian', 'rekap', 'laporan', 'ringkasan' sebagai 'expense' atau 'income' meskipun terdapat angka tanggal atau tahun (seperti 2026)!
+Aturan utama:
+1. Jika pesan berhubungan dengan keuangan atau catatan transaksi, inferensikan maksudnya secara luas dan akurat.
+2. Jika pesan tidak berhubungan sama sekali dengan transaksi keuangan, catatan keuangan, tagihan, pemasukan, pengeluaran, atau laporan finansial, kembalikan "other".
+3. Jangan memaksa mengubah pesan yang jelas-jelas adalah query, laporan, ringkasan, atau list menjadi transaksi baru.
+4. Gunakan konteks tanggal seperti hari ini, kemarin, minggu ini, bulan ini, tanggal tertentu, rentang tanggal, atau tahun sebagai parameter waktu bila relevan.
+5. Jika ada angka, nominal, tanggal, nama merchant, atau kata kunci keuangan, pertimbangkan sebagai bukti kuat bahwa ini adalah konteks finansial.
+6. Jangan terlalu membatasi diri pada contoh; pahami variasi bahasa Indonesia casual, singkat, atau tidak formal.
+7. Kembalikan JSON saja tanpa penjelasan, tanpa markdown, tanpa backtick.
+
+Klasifikasi yang mungkin:
+- "list_all": permintaan gabungan pemasukan dan pengeluaran sekaligus
+- "list_expenses": permintaan daftar atau rincian pengeluaran
+- "list_incomes": permintaan daftar atau rincian pemasukan
+- "list_recurring": daftar atau cek langganan / tagihan rutin / pengeluaran tetap
+- "add_recurring": tambah langganan atau tagihan rutin baru
+- "delete_recurring": hapus, stop, atau nonaktifkan langganan / tagihan rutin
+- "help_recurring": tanya cara atau bantuan terkait langganan
+- "summary": rekap, laporan, ringkasan, saldo, atau total transaksi per periode
+- "expense": mencatat pengeluaran baru
+- "income": mencatat pemasukan baru
+- "advice": minta saran atau insight keuangan
+- "menu": minta bantuan fitur atau daftar menu
+- "delete": hapus atau batalkan transaksi
+- "other": di luar konteks transaksi catatan keuangan
+
+PENTING:
+- "list", "daftar", "rincian", "rekap", "laporan", "ringkasan", "cek saldo", "berapa", dan variasi sejenis TIDAK boleh dipahami sebagai "expense" atau "income" bila tujuannya adalah query/reporting.
+- Jika user hanya bertanya umum di luar keuangan, jangan dibuat keuangan; langsung pilih "other".
+- Nilai tanggal dan rentang tanggal serta periode hari/minggu/bulan bila ada.
 
 Pesan pengguna: "${trimmed}"
 Tanggal hari ini: ${todayStr}
 
-Kategori transaksi umum: Food, Transport, Shopping, Bills, Entertainment, Health, Education, Lainnya.
+Kategori umum yang harus dipakai bila relevan: Food, Transport, Shopping, Bills, Entertainment, Health, Education, Lainnya.
 
-Keluarkan HANYA format JSON valid tanpa tanda backtick atau markdown, dengan struktur:
+Format output JSON valid:
 {
   "type": "list_all" | "list_expenses" | "list_incomes" | "list_recurring" | "add_recurring" | "delete_recurring" | "help_recurring" | "summary" | "expense" | "income" | "advice" | "menu" | "delete" | "other",
-  "amount": number, // Nominal angka bulat dalam Rupiah (0 jika bukan transaksi baru)
+  "amount": number,
   "note": "keterangan singkat transaksi atau nama langganan",
   "category": "kategori yang paling sesuai",
-  "period": "day" | "week" | "month", // diisi untuk summary / list_expenses / list_incomes / list_all
-  "target_date": "YYYY-MM-DD", // diisi jika user menanyakan tanggal spesifik / kemarin / kemarin lusa, misal "2026-09-27"
-  "display_date": "string tanggal yang mudah dibaca", // cth: "27 September 2026", "Kemarin"
-  "due_date": number // hari jatuh tempo (1-31) untuk add_recurring
-}`;
+  "period": "day" | "week" | "month",
+  "target_date": "YYYY-MM-DD",
+  "display_date": "string tanggal yang mudah dibaca",
+  "due_date": number
+}
+
+Contoh yang valid:
+- "list pengeluaran hari ini" => {"type":"list_expenses","period":"day","target_date":"2026-09-28","display_date":"Hari Ini"}
+- "gaji 5jt" => {"type":"income","amount":5000000,"note":"gaji","category":"Income"}
+- "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}
+- "halo apa kabar" => {"type":"other"}
+`;
 
   const genAI = new GoogleGenerativeAI(apiKey);
 

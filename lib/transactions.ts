@@ -71,6 +71,161 @@ function formatDateRangeLabel(startDate?: string, endDate?: string, fallback?: s
   return fallback || 'periode ini';
 }
 
+function buildDateLine(targetDate?: string, startDate?: string, endDate?: string): string {
+  const label = formatDateRangeLabel(startDate, endDate, targetDate);
+  return label ? `📅 *Tanggal:* ${label}\n` : '';
+}
+
+function buildSuccessTemplate(title: string, lines: string[], footer?: string): string {
+  const body = lines.join('\n');
+  const footerText = footer ? `\n${footer}` : '';
+  return `${title}\n\n${body}${footerText}`;
+}
+
+const responseTemplates = {
+  recordExpense: (ctx: { amount: number; category: string; note: string; date?: string; time: string; }) =>
+    buildSuccessTemplate('✅ *Pengeluaran Dicatat!*', [
+      `💰 *Jumlah:* ${formatRp(ctx.amount)}`,
+      `🏷️ *Kategori:* ${ctx.category}`,
+      `📝 *Catatan:* ${ctx.note}`,
+      ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
+      `🕒 *Waktu:* ${ctx.time}`
+    ].filter(Boolean)),
+
+  recordIncome: (ctx: { amount: number; category: string; note: string; date?: string; time: string; }) =>
+    buildSuccessTemplate('✅ *Pemasukan Dicatat!*', [
+      `💵 *Jumlah:* ${formatRp(ctx.amount)}`,
+      `🏷️ *Kategori:* ${ctx.category}`,
+      `📝 *Catatan:* ${ctx.note}`,
+      ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
+      `🕒 *Waktu:* ${ctx.time}`
+    ].filter(Boolean)),
+
+  deleteTransaction: (ctx: { type: 'expense' | 'income'; amount: number; note: string; category: string; date?: string; }) =>
+    buildSuccessTemplate('🗑️ *Transaksi Berhasil Dibatalkan/Dihapus!*', [
+      `• Jenis: ${ctx.type === 'expense' ? 'Pengeluaran' : 'Pemasukan'}`,
+      `• Jumlah: ${formatRp(ctx.amount)}`,
+      `• Keterangan: ${ctx.note || ctx.category}`,
+      `• Kategori: ${ctx.category}`,
+      ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
+      '• Status: _Dihapus dari Google Sheets_'
+    ].filter(Boolean)),
+
+  editTransaction: (ctx: { previousLabel: string; updatedLabel: string; date?: string; }) =>
+    buildSuccessTemplate('✏️ *Transaksi Berhasil Diperbarui!*', [
+      ctx.previousLabel,
+      ctx.updatedLabel,
+      ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
+      '_Perubahan telah disimpan ke Google Sheets._'
+    ].filter(Boolean)),
+
+  addRecurring: (ctx: { name: string; amount: number; category: string; dueDate: number }) =>
+    buildSuccessTemplate('🔁 *Pengeluaran Rutin & Langganan Tersimpan!*', [
+      `• Nama: *${ctx.name}*`,
+      `• Jumlah: *${formatRp(ctx.amount)}*`,
+      `• Kategori: ${ctx.category}`,
+      `• Jatuh tempo: *tiap tanggal ${ctx.dueDate}*`,
+      '• Status: *Aktif* ✅',
+      '_Bot akan otomatis mencatat dan mengingat tagihan ini setiap bulan._'
+    ]),
+
+  disableRecurring: (ctx: { name: string }) =>
+    buildSuccessTemplate('✅ *Langganan / Pengeluaran Rutin Berhasil Dinonaktifkan!*', [
+      `• Nama: *${ctx.name}*`,
+      '• Status: *Nonaktif* ⏸️',
+      '_Jika ingin aktifkan kembali, cukup tambah ulang dengan nama yang sama._'
+    ]),
+
+  menu: (ctx: { userId?: string }) => {
+    const userTag = ctx.userId ? `\n👤 *ID Akun:* \`${ctx.userId}\` _(Data terpisah & aman)_` : '';
+    const body = [
+      `Pilih perintah cepat atau ketik santai di chat (bebas format):${userTag}`,
+      '',
+      '*Catat Transaksi Santai:*',
+      '• `beli kopi 25rb` / `kopi 20k`',
+      '• `beli bensin 50k` / `bensin 50rb`',
+      '• `makan siang nasi padang 25.000`',
+      '• `bayar listrik 150 ribu`',
+      '• `dapet gaji 5jt` / `transferan 500rb`',
+      '',
+      '*Laporan & Saldo:*',
+      '• `pengeluaran hari ini` / `rekap hari`',
+      '• `rekap minggu ini`',
+      '• `saldo sekarang` / `laporan bulan ini`',
+      '',
+      '*Koreksi:*',
+      '• `hapus terakhir` / `batal`',
+      '• `edit terakhir <jumlah>`',
+      '',
+      '*AI & Foto Struk:*',
+      '• `saran` (AI Financial Advisor)',
+      '• Kirim langsung *foto struk belanja* 📷',
+      '• `list langganan` / `tambah langganan`'
+    ].join('\n');
+
+    return buildSuccessTemplate('🤖 Expense Bot Menu', [body]);
+  },
+
+  help: (ctx: { isRecurring?: boolean; rawText?: string }) => {
+    if (ctx.isRecurring) {
+      return buildSuccessTemplate('🔁 *Panduan Langganan & Pengeluaran Rutin Bulanan*', [
+        'Sistem bisa mencatat tagihan atau langganan tetap seperti Netflix, Spotify, WiFi, listrik, kos, gym, iCloud, dan lain-lain.',
+        '',
+        '*Format yang didukung:*',
+        '• `langganan <nama> <nominal> tgl <tanggal>`',
+        '• `tambah langganan <nama> <nominal> tgl <tanggal>`',
+        '• `rutin <nama> <nominal> tgl <tanggal>`',
+        '',
+        '*Contoh:*',
+        '• `langganan netflix 186k tgl 5`',
+        '• `langganan spotify 55rb tiap tgl 25`',
+        '• `tambah langganan wifi indihome 350k tgl 20`',
+        '• `rutin gym 150k tiap bulan tgl 1`',
+        '• `tambah rutin kost 1.5jt tgl 1`',
+        '',
+        '*Perintah terkait:*',
+        '• `list langganan` / `cek langganan` / `langganan apa aja` — cek daftar aktif',
+        '• `stop langganan <nama>` / `hapus rutin <nama>` — nonaktifkan langganan',
+        '',
+        '_Sistem akan mencatatnya secara otomatis setiap bulan ke Google Sheets sesuai tanggal jatuh tempo._'
+      ]);
+    }
+
+    const helpText = [
+      'Bot ini mendukung pencatatan dan pengecekan keuangan dengan bahasa sehari-hari. Anda bisa mengirim pesan santai tanpa format kaku.',
+      '',
+      '*Contoh Catat Pengeluaran:*',
+      '• `beli kopi 25rb` / `kopi 20k`',
+      '• `bensin 50k` / `beli bensin 50.000`',
+      '• `makan siang nasi padang 25rb`',
+      '• `bayar listrik 150 ribu`',
+      '• `parkir motor 2000`',
+      '',
+      '*Contoh Catat Pemasukan:*',
+      '• `gajian 5.000.000`',
+      '• `dapat transferan 500rb`',
+      '• `bonus 250k`',
+      '',
+      '*Cek Rekap & Saldo:*',
+      '• `pengeluaran hari ini` / `rekap minggu ini`',
+      '• `saldo sekarang` / `laporan bulan ini`',
+      '• `list pemasukan dan pengeluaran 27 - 28 september`',
+      '',
+      '*Koreksi Transaksi:*',
+      '• `hapus terakhir` / `batal`',
+      '• `edit terakhir 30000` / `edit jadi 35k`',
+      '• `hapus transaksi 27 september 2026`',
+      '',
+      '*Scan Struk:*',
+      'Kirim foto struk belanja langsung ke bot ini untuk diproses lebih lanjut.',
+      '',
+      'Ketik `menu` untuk melihat semua opsi cepat.'
+    ];
+
+    return buildSuccessTemplate('👋 *Panduan Penggunaan Bot Keuangan*', helpText);
+  },
+};
+
 /**
  * Main coordinator to handle incoming user chat message
  */
@@ -170,17 +325,13 @@ async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promi
 
   await appendTransaction(tx);
 
-  const dateLine = parsed.targetDate
-    ? `📅 *Tanggal:* ${formatDateLabel(parsed.targetDate)}\n`
-    : '';
-
-  const replyText =
-    `✅ *Pengeluaran Dicatat!*\n\n` +
-    `💰 *Jumlah:* ${formatRp(tx.amount)}\n` +
-    `🏷️ *Kategori:* ${tx.category}\n` +
-    `📝 *Catatan:* ${tx.note}\n` +
-    `${dateLine}` +
-    `📅 *Waktu:* ${formatDate(tx.created_at)}`;
+  const replyText = responseTemplates.recordExpense({
+    amount: tx.amount,
+    category: tx.category,
+    note: tx.note,
+    date: parsed.targetDate ? formatDateLabel(parsed.targetDate) : undefined,
+    time: formatDate(tx.created_at)
+  });
 
   return { success: true, replyText };
 }
@@ -210,17 +361,13 @@ async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promis
 
   await appendTransaction(tx);
 
-  const dateLine = parsed.targetDate
-    ? `📅 *Tanggal:* ${formatDateLabel(parsed.targetDate)}\n`
-    : '';
-
-  const replyText =
-    `✅ *Pemasukan Dicatat!*\n\n` +
-    `💵 *Jumlah:* ${formatRp(tx.amount)}\n` +
-    `🏷️ *Kategori:* ${tx.category}\n` +
-    `📝 *Catatan:* ${tx.note}\n` +
-    `${dateLine}` +
-    `📅 *Waktu:* ${formatDate(tx.created_at)}`;
+  const replyText = responseTemplates.recordIncome({
+    amount: tx.amount,
+    category: tx.category,
+    note: tx.note,
+    date: parsed.targetDate ? formatDateLabel(parsed.targetDate) : undefined,
+    time: formatDate(tx.created_at)
+  });
 
   return { success: true, replyText };
 }
@@ -622,18 +769,13 @@ async function handleDeleteLast(parsed?: ParsedIntent, userId?: string): Promise
     };
   }
 
-  const dateText = deleted.created_at
-    ? `📅 *Tanggal:* ${formatDateLabel(deleted.created_at)}\n`
-    : '';
-
-  const replyText =
-    `🗑️ *Transaksi Berhasil Dibatalkan/Dihapus!*\n\n` +
-    `• Jenis: ${deleted.type === 'expense' ? 'Pengeluaran' : 'Pemasukan'}\n` +
-    `• Jumlah: ${formatRp(deleted.amount)}\n` +
-    `• Keterangan: ${deleted.note || deleted.category}\n` +
-    `• Kategori: ${deleted.category}\n` +
-    `${dateText}\n` +
-    `_Data telah dihapus dari Google Sheets._`;
+  const replyText = responseTemplates.deleteTransaction({
+    type: deleted.type,
+    amount: deleted.amount,
+    note: deleted.note || deleted.category,
+    category: deleted.category,
+    date: deleted.created_at ? formatDateLabel(deleted.created_at) : undefined
+  });
 
   return { success: true, replyText };
 }
@@ -691,15 +833,11 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
 
   changesText += `• Kategori: ${result.updated.category}\n`;
 
-  const targetDateLabel = result.updated.created_at
-    ? `📅 *Tanggal:* ${formatDateLabel(result.updated.created_at)}\n`
-    : '';
-
-  const replyText =
-    `✏️ *Transaksi Berhasil Diperbarui!*\n\n` +
-    changesText +
-    `${targetDateLabel}\n` +
-    `_Perubahan telah disimpan ke Google Sheets._`;
+  const replyText = responseTemplates.editTransaction({
+    previousLabel: changesText.trim(),
+    updatedLabel: '_Perubahan telah disimpan ke Google Sheets._',
+    date: result.updated.created_at ? formatDateLabel(result.updated.created_at) : undefined
+  });
 
   return { success: true, replyText };
 }
@@ -709,26 +847,7 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
  */
 function handleMenu(userId?: string): ExecutionResult {
   const headerText = '🤖 Expense Bot Menu';
-  const userTag = userId ? `\n👤 *ID Akun:* \`${userId}\` _(Data terpisah & aman)_` : '';
-  const bodyText =
-    `Pilih perintah cepat atau ketik santai di chat (bebas format):${userTag}\n\n` +
-    `*Catat Transaksi Santai:*\n` +
-    `• \`beli kopi 25rb\` / \`kopi 20k\`\n` +
-    `• \`beli bensin 50k\` / \`bensin 50rb\`\n` +
-    `• \`makan siang nasi padang 25.000\`\n` +
-    `• \`bayar listrik 150 ribu\`\n` +
-    `• \`dapet gaji 5jt\` / \`transferan 500rb\`\n\n` +
-    `*Laporan & Saldo:*\n` +
-    `• \`pengeluaran hari ini\` / \`rekap hari\`\n` +
-    `• \`rekap minggu ini\`\n` +
-    `• \`saldo sekarang\` / \`laporan bulan ini\`\n\n` +
-    `*Koreksi:*\n` +
-    `• \`hapus terakhir\` / \`batal\`\n` +
-    `• \`edit terakhir <jumlah>\`\n\n` +
-    `*AI & Foto Struk:*\n` +
-    `• \`saran\` (AI Financial Advisor)\n` +
-    `• Kirim langsung *foto struk belanja* 📷\n` +
-    `• \`list langganan\` / \`tambah langganan\``;
+  const bodyText = responseTemplates.menu({ userId }).replace(/^.*\n\n/, '');
 
   const sections = [
     {
@@ -756,7 +875,7 @@ function handleMenu(userId?: string): ExecutionResult {
 
   return {
     success: true,
-    replyText: `${headerText}\n\n${bodyText}`,
+    replyText: responseTemplates.menu({ userId }),
     interactiveType: 'list',
     interactiveData: {
       header: headerText,
@@ -814,14 +933,12 @@ async function handleAddRecurring(parsed: ParsedIntent, userId?: string): Promis
 
   await addRecurringExpense(item);
 
-  const replyText =
-    `🔁 *Pengeluaran Rutin & Langganan Tersimpan!*\n\n` +
-    `• Nama: *${item.name}*\n` +
-    `• Jumlah: *${formatRp(item.amount)}*\n` +
-    `• Kategori: ${item.category}\n` +
-    `• Tanggal Jatuh Tempo: *Tiap tanggal ${item.due_date}*\n` +
-    `• Status: *Aktif* ✅\n\n` +
-    `_Bot akan otomatis mencatatnya ke Google Sheets setiap bulan dan mengirim notifikasi._`;
+  const replyText = responseTemplates.addRecurring({
+    name: item.name,
+    amount: item.amount,
+    category: item.category,
+    dueDate: item.due_date
+  });
 
   return { success: true, replyText };
 }
@@ -849,15 +966,16 @@ async function handleListRecurring(userId?: string): Promise<ExecutionResult> {
 
   const totalMonthly = activeList.reduce((sum, r) => sum + r.amount, 0);
   const itemsText = activeList
-    .map((r, i) => `${i + 1}. *${r.name}* — ${formatRp(r.amount)} (Tgl ${r.due_date}) [${r.category}]`)
+    .map((r, i) => `${i + 1}. *${r.name}* — ${formatRp(r.amount)} — Jatuh tempo tiap ${r.due_date} [${r.category}]`)
     .join('\n');
 
   const replyText =
-    `📋 *Daftar Pengeluaran Rutin & Langganan Aktif:*\n\n` +
+    `📋 *Daftar Pengeluaran Rutin & Langganan Aktif*\n\n` +
     `${itemsText}\n\n` +
-    `💰 *Total Rutin:* *${formatRp(totalMonthly)}* / bulan\n\n` +
-    `_• Untuk stop/hapus: ketik \`stop langganan <nama>\` atau \`hapus rutin <nama>\`_\n` +
-    `_• Untuk tambah: ketik \`langganan <nama> <nominal> tgl <hari>\`_`;
+    `💰 *Total Rutin Bulanan:* *${formatRp(totalMonthly)}*\n` +
+    `🔢 *Jumlah Aktif:* *${activeList.length}* item\n\n` +
+    `_Stop: \`stop langganan <nama>\`_\n` +
+    `_Tambah: \`langganan <nama> <nominal> tgl <hari>\`_`;
 
   return { success: true, replyText };
 }
@@ -882,7 +1000,7 @@ async function handleDeleteRecurring(name: string, userId?: string): Promise<Exe
     };
   }
 
-  const replyText = `✅ Langganan / pengeluaran rutin *${displayName}* berhasil dinonaktifkan.`;
+  const replyText = responseTemplates.disableRecurring({ name: displayName });
   return { success: true, replyText };
 }
 
@@ -890,24 +1008,7 @@ async function handleDeleteRecurring(name: string, userId?: string): Promise<Exe
  * Handle recurring help / tutorial message
  */
 function handleHelpRecurring(): ExecutionResult {
-  const replyText =
-    `🔁 *Panduan Langganan & Pengeluaran Rutin Bulanan*\n\n` +
-    `Jadwalkan tagihan atau langganan rutin (seperti Netflix, Spotify, WiFi, Listrik, Kos, Gym, iCloud) agar dicatat otomatis setiap bulan sesuai tanggal jatuh tempo.\n\n` +
-    `📌 *Format Perintah Cepat & Fleksibel:*\n` +
-    `• \`langganan <nama> <nominal> tgl <tanggal>\`\n` +
-    `• \`tambah langganan <nama> <nominal> tgl <tanggal>\`\n` +
-    `• \`rutin <nama> <nominal> tgl <tanggal>\`\n\n` +
-    `💡 *Contoh Menambah:*\n` +
-    `• \`langganan netflix 186k tgl 5\`\n` +
-    `• \`langganan spotify 55rb tiap tgl 25\`\n` +
-    `• \`tambah langganan wifi indihome 350k tgl 20\`\n` +
-    `• \`rutin gym 150k tiap bulan tgl 1\`\n` +
-    `• \`tambah rutin kost 1.5jt tgl 1\`\n\n` +
-    `📋 *Perintah Terkait:*\n` +
-    `• \`list langganan\` / \`cek langganan\` / \`langganan apa aja\` — Cek daftar aktif\n` +
-    `• \`stop langganan <nama>\` / \`hapus rutin <nama>\` — Menonaktifkan langganan\n\n` +
-    `_Sistem akan otomatis mencatatnya tiap bulan ke Google Sheets dan mengirimkan notifikasi ke Anda._`;
-
+  const replyText = responseTemplates.help({ isRecurring: true });
   return { success: true, replyText };
 }
 
@@ -920,25 +1021,5 @@ function handleHelp(rawText: string): ExecutionResult {
     return handleHelpRecurring();
   }
 
-  const replyText =
-    `👋 *Format Pesan Bebas & Santai (Tanpa Format Kaku)*\n\n` +
-    `Anda bisa langsung mencatat pengeluaran atau pemasukan dengan bahasa sehari-hari:\n\n` +
-    `💡 *Contoh Catat Pengeluaran:*\n` +
-    `• \`beli kopi 25rb\` atau \`kopi 20k\`\n` +
-    `• \`bensin 50k\` atau \`beli bensin 50.000\`\n` +
-    `• \`makan siang nasi padang 25rb\`\n` +
-    `• \`bayar listrik 150 ribu\`\n` +
-    `• \`parkir motor 2000\`\n\n` +
-    `💰 *Contoh Catat Pemasukan:*\n` +
-    `• \`gajian 5.000.000\`\n` +
-    `• \`dapat transferan 500rb\`\n` +
-    `• \`bonus 250k\`\n\n` +
-    `📊 *Cek Rekap & Saldo:*\n` +
-    `• \`pengeluaran hari ini\` atau \`rekap minggu ini\`\n` +
-    `• \`saldo sekarang\` atau \`laporan bulan ini\`\n\n` +
-    `📷 *Scan Struk:*\n` +
-    `Langsung kirim foto struk belanja Anda ke bot ini!\n\n` +
-    `Ketik \`menu\` untuk melihat opsi lainnya.`;
-
-  return { success: false, replyText };
+  return { success: true, replyText: responseTemplates.help({ rawText }) };
 }

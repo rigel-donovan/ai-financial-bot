@@ -181,6 +181,14 @@ async function runTests() {
   console.assert(res13.success && res13.replyText.includes('Spotify'), 'res13 failed: ' + res13.replyText);
   console.log('Stop recurring via "stop langganan": OK');
 
+  const menuRes = await handleUserMessage('menu');
+  console.assert(menuRes.success && menuRes.replyText.includes('Expense Bot Menu'), 'menu response should be successful: ' + menuRes.replyText);
+  console.log('Menu response: OK');
+
+  const helpRes = await handleUserMessage('bantuan');
+  console.assert(helpRes.success && helpRes.replyText.includes('Format Pesan') || helpRes.replyText.includes('Panduan'), 'help response should be successful: ' + helpRes.replyText);
+  console.log('Help response: OK');
+
   const historicalDeleteOutput = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_output_delete');
   console.assert(historicalDeleteOutput.success, 'historical delete setup failed: ' + historicalDeleteOutput.replyText);
   const deleteOutput = await handleUserMessage('hapus transaksi 27 september 2026', 'user_output_delete');
