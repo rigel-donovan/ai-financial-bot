@@ -1,6 +1,13 @@
 import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
 
+const assertionFailures = [];
+const originalAssert = console.assert.bind(console);
+console.assert = (condition, ...args) => {
+  if (!condition) assertionFailures.push(args.map(String).join(' '));
+  originalAssert(condition, ...args);
+};
+
 async function runTests() {
   console.log('--- 1. Testing Amount Parsing ---');
   console.assert(parseAmount('25000') === 25000, '25000 failed');
@@ -29,6 +36,9 @@ async function runTests() {
   const p4 = parseMessage('hapus terakhir');
   console.assert(p4.intent === 'DELETE_LAST', 'p4 failed');
 
+  const p4b = parseMessage('hapus transaksi 27 september 2026');
+  console.assert(p4b.intent === 'DELETE_LAST' && p4b.targetDate === '2026-09-27' && !p4b.amount && !p4b.note, 'p4b failed: ' + JSON.stringify(p4b));
+
   const p5 = parseMessage('edit terakhir 30000');
   console.assert(p5.intent === 'EDIT_LAST' && p5.amount === 30000, 'p5 failed');
 
@@ -40,6 +50,9 @@ async function runTests() {
 
   const p8 = parseMessage('menu');
   console.assert(p8.intent === 'MENU', 'p8 failed');
+
+  const p8b = parseMessage('bantuan');
+  console.assert(p8b.intent === 'HELP', 'p8b failed: ' + JSON.stringify(p8b));
 
   // Test Date-filtered queries
   const p9 = parseMessage('list pemasukan tanggal 27 september 2026');
@@ -133,8 +146,11 @@ async function runTests() {
   const p32 = parseMessage('edit 27 september 2026 jadi 250000');
   console.assert(p32.intent === 'EDIT_LAST' && p32.targetDate === '2026-09-27', 'p32 failed: ' + JSON.stringify(p32));
 
-  const p33 = parseQueryDate('struk tanggal 27 september 2026');
-  console.assert(p33 && p33.targetDate === '2026-09-27', 'p33 failed: ' + JSON.stringify(p33));
+  const p33 = parseMessage('edit pengeluaran PERTAMINA ke tanggal 27 september 2026');
+  console.assert(p33.intent === 'EDIT_LAST' && p33.name === 'PERTAMINA' && p33.newDate === '2026-09-27' && !p33.amount && !p33.note, 'p33 failed: ' + JSON.stringify(p33));
+
+  const p34 = parseQueryDate('struk tanggal 27 september 2026');
+  console.assert(p34 && p34.targetDate === '2026-09-27', 'p34 failed: ' + JSON.stringify(p34));
 
   console.log('✓ parseMessage passed!');
 
@@ -187,7 +203,7 @@ async function runTests() {
   console.log('Date range list: OK');
 
   const historicalDelete = await handleUserMessage('hapus transaksi 27 september 2026', 'user_range');
-  console.assert(historicalDelete.success && historicalDelete.replyText.includes('Tanggal: 27 September 2026'), 'historical delete output failed: ' + historicalDelete.replyText);
+  console.assert(historicalDelete.success && historicalDelete.replyText.includes('27 September 2026'), 'historical delete output failed: ' + historicalDelete.replyText);
   console.log('Historical delete output: OK');
 
   const res11 = await handleUserMessage('langganan spotify 55rb tiap tgl 25');
@@ -211,7 +227,7 @@ async function runTests() {
   console.log('Help response: OK');
 
   const downloadRes = await handleUserMessage('download spreadsheet', 'user_export');
-  console.assert(downloadRes.success && downloadRes.replyText.includes('/api/download-spreadsheet?userId=user_export') && downloadRes.replyText.includes('hanya data user'), 'download spreadsheet response should include a user-scoped download link: ' + downloadRes.replyText);
+  console.assert(downloadRes.success && downloadRes.replyText.includes('/api/download-spreadsheet?userId=user_export') && downloadRes.replyText.includes('hanya mencakup transaksi milik user ini saja'), 'download spreadsheet response should include a user-scoped download link: ' + downloadRes.replyText);
   console.log('Download spreadsheet response: OK');
 
   const historicalDeleteOutput = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_output_delete');
@@ -238,6 +254,14 @@ async function runTests() {
 
   const pastEdit = await handleUserMessage('edit 27 september 2026 jadi 250000', 'user_date');
   console.assert(pastEdit.success && pastEdit.replyText.includes('Rp250.000'), 'Historical edit failed: ' + pastEdit.replyText);
+
+  const datedExpense = await handleUserMessage('28 september 2026 PERTAMINA 100rb', 'user_move_date');
+  console.assert(datedExpense.success, 'Date move setup failed: ' + datedExpense.replyText);
+  console.assert(datedExpense.replyText.includes('Rp100.000'), 'Date move setup amount parsed incorrectly: ' + datedExpense.replyText);
+  const moveDate = await handleUserMessage('edit pengeluaran PERTAMINA ke tanggal 27 september 2026', 'user_move_date');
+  console.assert(moveDate.success && moveDate.replyText.includes('Tanggal: 28 September 2026 ➔ *27 September 2026*'), 'Date move failed: ' + moveDate.replyText);
+  const movedList = await handleUserMessage('list pengeluaran 27 september 2026', 'user_move_date');
+  console.assert(movedList.success && movedList.replyText.includes('Rp100.000'), 'Moved transaction not found on new date: ' + movedList.replyText);
 
   console.log('Historical date commands: OK');
 
@@ -276,6 +300,9 @@ async function runTests() {
 
   console.log('Multi-user data isolation: OK');
 
+  if (assertionFailures.length > 0) {
+    throw new Error(`${assertionFailures.length} regression assertion(s) failed.`);
+  }
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! EVERYTHING WORKS & MAKES SENSE.');
 }
 

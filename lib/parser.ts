@@ -446,10 +446,17 @@ export function parseMessage(
 
   const dateContext = extractDateContextFromText(trimmed);
 
-  // 1. Menu / Bantuan / Help / Sapaan
-  if (/^(?:menu|bantuan|help|halo|hi|hai|mulai|start|fitur|panduan|cara pakai)$/i.test(lower)) {
+  // 1. Menu / Sapaan
+  if (/^(?:menu|halo|hi|hai|mulai|start|fitur)$/i.test(lower)) {
     return {
       intent: 'MENU',
+      rawMessage: trimmed
+    };
+  }
+
+  if (/^(?:bantuan|help|panduan|cara pakai)$/i.test(lower)) {
+    return {
+      intent: 'HELP',
       rawMessage: trimmed
     };
   }
@@ -475,8 +482,12 @@ export function parseMessage(
   const isRecurringWord = /\b(?:rutin|langganan|subscription|subs)(?:ku)?\b/i.test(lower);
   const hasIncomeExpression = /\b(?:pemasukan|income|uang\s+masuk|pendapatan|gaji)\b/i.test(lower);
   const hasExpenseExpression = /\b(?:pengeluaran|biaya|expense|uang\s+keluar|belanja|penyusutan|potongan)\b/i.test(lower);
+  const hasIncomeMinusExpense = /\b(?:pemasukan|income|uang\s+masuk|pendapatan|gaji)\b\s*-\s*\b(?:pengeluaran|biaya|expense|uang\s+keluar|belanja)\b/i.test(lower);
+  const hasExpenseMinusIncome = /\b(?:pengeluaran|biaya|expense|uang\s+keluar|belanja)\b\s*-\s*\b(?:pemasukan|income|uang\s+masuk|pendapatan|gaji)\b/i.test(lower);
   const isNetCalculationRequest =
-    (hasIncomeExpression && hasExpenseExpression && /\b(?:kurang|dikurangi|minus|selisih|net(?:to)?|bersih|beda)\b|(?<!\d)-(?!\d)/i.test(lower)) ||
+    (hasIncomeExpression && hasExpenseExpression && /\b(?:kurang|dikurangi|minus|selisih|net(?:to)?|bersih|beda)\b/i.test(lower)) ||
+    hasIncomeMinusExpense ||
+    hasExpenseMinusIncome ||
     /\b(?:berapa|hitung|total|jumlah|akumulasi)\b.{0,40}\b(?:pemasukan|income|pendapatan).{0,40}\b(?:pengeluaran|biaya|expense)\b/i.test(lower);
   const hasFinancialPeriod = /\b(?:hari(?:\s+ini)?|kemarin|minggu(?:\s+ini|\s+lalu)?|bulan(?:\s+ini|\s+lalu)?|tahun|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|today|week|month|year)\b/i.test(lower);
   const isQueryOrReport =
@@ -627,20 +638,23 @@ export function parseMessage(
       /\b(?:hapus|batal|batalin|cancel|undo)\s+(?:transaksi|catatan|pengeluaran|pemasukan|struk|yang tadi|tadi|sebelumnya)\b/i.test(lower);
 
     if (isDeleteWord) {
-      const AMOUNT_REGEX = /(?:(?:rp\.?|idr)\s*)?(?:\d+(?:[.,]\d+)?\s*(?:jt|juta|m|k|rb|ribu)\b|\d{1,3}(?:[.,]\d{3})+(?!\d)|\b\d{4,9}\b)/i;
-      let deleteAmount: number | undefined;
-      const matchAmt = trimmed.match(AMOUNT_REGEX);
-      if (matchAmt) {
-        deleteAmount = parseAmount(matchAmt[0]) || undefined;
-      }
+      const extractedAmount = extractTransactionAmount(trimmed);
+      const deleteAmount = extractedAmount?.amount;
 
       let cleanNote = trimmed
         .replace(/^(?:tolong\s+)?(?:hapus|batal|batalin|cancel|undo|delete|ralat)\s+/i, '')
         .replace(/\b(?:dari struk|struk tadi|yang tadi|tadi|sebelumnya|terakhir|transaksi|catatan|pengeluaran|pemasukan)\b/gi, '')
         .trim();
-      if (matchAmt) {
-        cleanNote = cleanNote.replace(matchAmt[0], '').replace(/\s+/g, ' ').trim();
+      if (extractedAmount) {
+        cleanNote = cleanNote.replace(extractedAmount.raw, '').replace(/\s+/g, ' ').trim();
       }
+      cleanNote = cleanNote
+        .replace(/\b(?:tgl|tanggal)\s*\d{1,2}\b/gi, '')
+        .replace(/\b\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?\b/gi, '')
+        .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, '')
+        .replace(/\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (cleanNote === 'undo' || cleanNote === 'cancel' || cleanNote === 'hapus' || cleanNote === 'batal') {
         cleanNote = '';
       }
@@ -671,19 +685,27 @@ export function parseMessage(
       const targetPart = (jadiMatch[1] || '').trim();
       const replacementPart = (jadiMatch[2] || '').trim();
 
-      const amtMatch = replacementPart.match(AMOUNT_REGEX);
+      const newDateInfo = extractDateContextFromText(replacementPart);
+      const newDate = newDateInfo?.targetDate;
+      const replacementContent = newDate
+        ? replacementPart.replace(/(?:\b(?:ke|pada)\s+)?(?:\b(?:tgl|tanggal)\s+)?(?:\d{1,2}\s+[a-z]+(?:\s+\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b)/i, '').trim()
+        : replacementPart;
+      const amtMatch = replacementContent.match(AMOUNT_REGEX);
       const amount = amtMatch ? parseAmount(amtMatch[0]) || undefined : undefined;
 
-      const categoryRequested = /\b(?:kategori|category)\b/i.test(targetPart) || /^\s*(?:kategori|category)\b/i.test(replacementPart);
-      const explicitCategory = replacementPart.match(/\b(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?([\p{L}\d_-]+)/iu);
-      const noteClause = replacementPart.match(/\b(?:catatan|keterangan|note)\s*(?:menjadi|jadi|ke|adalah)?\s*(.+)$/i);
-      const replacementIsCategoryOnly = /^\s*(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?[\p{L}\d_-]+\s*$/iu.test(replacementPart);
-      const categoryText = replacementPart.split(/\s+(?:dan\s+)?(?:catatan|keterangan|note)\b/i)[0];
+      const categoryRequested = /\b(?:kategori|category)\b/i.test(targetPart) || /^\s*(?:kategori|category)\b/i.test(replacementContent);
+      const explicitCategory = replacementContent.match(/\b(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?([\p{L}\d_-]+)/iu);
+      const noteClause = replacementContent.match(/\b(?:catatan|keterangan|note)\s*(?:menjadi|jadi|ke|adalah)?\s*(.+)$/i);
+      const replacementIsCategoryOnly = /^\s*(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#[\p{L}\d_-]+\s*$/iu.test(replacementContent);
+      const categoryText = replacementContent.split(/\s+(?:dan\s+)?(?:catatan|keterangan|note)\b/i)[0];
       const newCategory = explicitCategory?.[1] || (categoryRequested && !amtMatch ? categoryText.replace(/^\s*(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*/i, '').replace(/^#/, '').trim() : undefined);
 
-      let newNote = replacementPart;
+      let newNote = replacementContent;
       if (amtMatch) {
-        newNote = replacementPart.replace(amtMatch[0], '').replace(/\s+/g, ' ').trim();
+        newNote = replacementContent.replace(amtMatch[0], '').replace(/\s+/g, ' ').trim();
+      }
+      if (newDate && !amtMatch && !noteClause) {
+        newNote = '';
       }
       if (noteClause) {
         newNote = noteClause[1]
@@ -701,12 +723,12 @@ export function parseMessage(
         newNote = '';
       }
 
-      let targetQuery = targetPart
+      const targetQuery = targetPart
         .replace(AMOUNT_REGEX, '')
         .replace(/\b(?:kategori|category|pengeluaran|terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
         .trim();
 
-      const dateInfo = extractDateContextFromText(targetPart) || dateContext;
+      const dateInfo = extractDateContextFromText(targetPart) || (newDate ? undefined : dateContext);
       return {
         intent: 'EDIT_LAST',
         amount,
@@ -714,6 +736,7 @@ export function parseMessage(
         category: newCategory,
         name: targetQuery || undefined,
         targetDate: dateInfo?.targetDate,
+        newDate,
         startDate: dateInfo?.startDate,
         endDate: dateInfo?.endDate,
         displayDate: dateInfo?.displayDate,

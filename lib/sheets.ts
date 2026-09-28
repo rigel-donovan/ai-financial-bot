@@ -372,7 +372,7 @@ export async function deleteTransaction(criteria?: {
       if (criteria?.targetDate && !matchesTargetDate(tx.created_at, criteria.targetDate)) {
         continue;
       }
-      if (!criteria || (!criteria.amount && !criteria.query && !criteria.targetDate)) {
+      if (!criteria || (!criteria.amount && !criteria.query)) {
         return mockStore.transactions.splice(i, 1)[0];
       }
       const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
@@ -516,12 +516,13 @@ export interface EditTransactionOptions {
   newAmount?: number;
   newNote?: string;
   newCategory?: string;
+  newDate?: string;
   userId?: string;
   targetDate?: string;
 }
 
 /**
- * Edit a transaction (amount, note, or category), scoped to a specific user
+ * Edit a transaction, scoped to a specific user
  */
 export async function editTransaction(
   options: EditTransactionOptions | number
@@ -601,6 +602,9 @@ export async function editTransaction(
     }
     if (opts.newCategory) {
       mockStore.transactions[targetIdx].category = opts.newCategory;
+    }
+    if (opts.newDate) {
+      mockStore.transactions[targetIdx].created_at = new Date(`${opts.newDate}T12:00:00+07:00`).toISOString();
     }
     return { previous: prev, updated: mockStore.transactions[targetIdx] };
   }
@@ -717,6 +721,9 @@ export async function editTransaction(
         : previous.type === 'income' && (!previous.category || previous.category === 'Lainnya')
         ? 'Income'
         : previous.category;
+    const updatedCreatedAt = opts.newDate
+      ? new Date(`${opts.newDate}T12:00:00+07:00`).toISOString()
+      : previous.created_at;
 
     const targetRowIndex = targetIdx + 2;
 
@@ -730,6 +737,14 @@ export async function editTransaction(
           values: [[updatedAmount, updatedCategory, updatedNote]]
         }
       });
+      if (opts.newDate) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `transactions!I${targetRowIndex}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[updatedCreatedAt]] }
+        });
+      }
     } else {
       // Legacy columns C..E
       await sheets.spreadsheets.values.update({
@@ -740,13 +755,22 @@ export async function editTransaction(
           values: [[updatedAmount, updatedCategory, updatedNote]]
         }
       });
+      if (opts.newDate) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `transactions!H${targetRowIndex}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[updatedCreatedAt]] }
+        });
+      }
     }
 
     const updated: Transaction = {
       ...previous,
       amount: updatedAmount,
       note: updatedNote,
-      category: updatedCategory
+      category: updatedCategory,
+      created_at: updatedCreatedAt
     };
 
     return { previous, updated };

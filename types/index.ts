@@ -61,6 +61,7 @@ export interface ParsedIntent {
   name?: string; // for recurring
   period?: 'day' | 'week' | 'month' | 'year';
   targetDate?: string; // YYYY-MM-DD for single-day queries
+  newDate?: string; // YYYY-MM-DD for moving an existing transaction
   startDate?: string; // YYYY-MM-DD for ranges
   endDate?: string; // YYYY-MM-DD for ranges
   displayDate?: string; // e.g. "27 September 2026", "Kemarin"

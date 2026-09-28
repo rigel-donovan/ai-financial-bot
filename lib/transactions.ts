@@ -238,7 +238,7 @@ export async function handleUserMessage(
   let parsed: ParsedIntent = parseMessage(rawText, categoryMap);
 
   // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali
-  if ((parsed.intent === 'UNKNOWN' || parsed.intent === 'EDIT_LAST') && process.env.GEMINI_API_KEY) {
+  if (parsed.intent === 'UNKNOWN' && process.env.GEMINI_API_KEY) {
     try {
       const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap);
       if (aiParsed && aiParsed.intent !== 'UNKNOWN') {
@@ -810,7 +810,7 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
   const newNote = parsed.note;
   const targetQuery = parsed.name;
 
-  if ((!newAmount || newAmount <= 0) && !newNote && !parsed.category) {
+  if ((!newAmount || newAmount <= 0) && !newNote && !parsed.category && !parsed.newDate) {
     return {
       success: false,
       replyText: 'Sebutkan perubahan yang diinginkan. Contoh: ubah kategori bensin jadi Transport, ganti catatan transaksi terakhir menjadi bensin pertalite, atau ubah kopi jadi 35rb kategori Food.'
@@ -826,6 +826,7 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
     newAmount: newAmount && newAmount > 0 ? newAmount : undefined,
     newNote,
     newCategory,
+    newDate: parsed.newDate,
     userId,
     targetDate: parsed.targetDate
   });
@@ -851,6 +852,10 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
     changesText += `• Keterangan: "${result.previous.note}" ➔ *"${result.updated.note}"*\n`;
   } else {
     changesText += `• Keterangan: *${result.updated.note || result.updated.category}*\n`;
+  }
+
+  if (result.previous.created_at !== result.updated.created_at) {
+    changesText += `• Tanggal: ${formatDateLabel(result.previous.created_at)} ➔ *${formatDateLabel(result.updated.created_at)}*\n`;
   }
 
   changesText += `• Kategori: ${result.updated.category}\n`;
