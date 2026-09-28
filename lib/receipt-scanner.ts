@@ -23,7 +23,17 @@ function resolveReceiptDate(targetDate?: string): string {
 }
 
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 503]);
-const MAX_GEMINI_ATTEMPTS_PER_MODEL = 3;
+const MAX_GEMINI_ATTEMPTS_PER_MODEL = 2;
+const GEMINI_REQUEST_TIMEOUT_MS = 12_000;
+const OCR_SPACE_REQUEST_TIMEOUT_MS = 15_000;
+
+interface ReceiptExtraction {
+  total_amount: number;
+  merchant: string;
+  category?: string;
+  items?: string;
+  note?: string;
+}
 
 function getGeminiErrorStatus(err: any): number | undefined {
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
@@ -34,6 +44,93 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getOcrCategory(text: string): string {
+  if (/\b(?:pertamina|pertamax|spbu|bbm|bensin|solar)\b/i.test(text)) return 'Transport';
+  return detectCategory(text);
+}
+
+function extractAmountFromOcrLine(line: string): number {
+  const values = line.match(/(?:rp\.?\s*)?[\d][\d.,\s]*/gi) || [];
+  const value = values.at(-1);
+  if (!value) return 0;
+  const digits = value.replace(/\D/g, '');
+  return digits ? Number(digits) : 0;
+}
+
+function extractReceiptFromOcrText(text: string): ReceiptExtraction {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const totalLine = [...lines]
+    .reverse()
+    .find((line) => /\b(?:grand\s*)?total(?:\s+(?:harga|bayar|payment))?\b/i.test(line));
+  const total = totalLine ? extractAmountFromOcrLine(totalLine) : 0;
+
+  if (total <= 0) {
+    throw new Error('OCR.Space tidak menemukan baris total pembayaran pada struk.');
+  }
+
+  const merchant = lines.find((line) =>
+    !/^(?:struk|receipt|invoice|cash|tanggal|waktu|shift|no\.?\s*(?:trans|nota)|total)/i.test(line) &&
+    /[a-z]/i.test(line)
+  ) || 'Toko/Merchant';
+  const category = getOcrCategory(`${merchant}\n${text}`);
+
+  return {
+    total_amount: total,
+    merchant,
+    category,
+    note: `${merchant} (Scan Struk)`
+  };
+}
+
+async function scanWithOcrSpace(imageBuffer: Buffer, mimeType: string): Promise<ReceiptExtraction> {
+  const apiKey = process.env.OCR_SPACE_API_KEY;
+  if (!apiKey) throw new Error('OCR_SPACE_API_KEY belum diatur.');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OCR_SPACE_REQUEST_TIMEOUT_MS);
+
+  try {
+    const body = new URLSearchParams({
+      apikey: apiKey,
+      base64Image: `data:${mimeType};base64,${imageBuffer.toString('base64')}`,
+      language: 'eng',
+      isOverlayRequired: 'false',
+      OCREngine: '2',
+      scale: 'true'
+    });
+    const response = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => null) as {
+      IsErroredOnProcessing?: boolean;
+      ErrorMessage?: string[] | string;
+      ParsedResults?: Array<{ ParsedText?: string }>;
+    } | null;
+
+    if (!response.ok || payload?.IsErroredOnProcessing) {
+      const reason = Array.isArray(payload?.ErrorMessage)
+        ? payload.ErrorMessage.join(', ')
+        : payload?.ErrorMessage;
+      const error = new Error(reason || `OCR.Space gagal (HTTP ${response.status}).`);
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
+    }
+
+    const text = payload?.ParsedResults?.map((result) => result.ParsedText || '').join('\n').trim();
+    if (!text) throw new Error('OCR.Space tidak menemukan teks pada gambar struk.');
+    return extractReceiptFromOcrText(text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function scanReceiptImage(
   imageBuffer: Buffer,
   mimeType: string = 'image/jpeg',
@@ -41,13 +138,6 @@ export async function scanReceiptImage(
   targetDate?: string
 ): Promise<ScannedReceiptResult> {
   const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return {
-      success: false,
-      replyText: '⚠️ *Gemini API Key belum diatur.*\nFitur scan struk membutuhkan `GEMINI_API_KEY` aktif di `.env.local`.'
-    };
-  }
 
   const prompt = `
 Kamu adalah asisten keuangan pribadi yang ahli membaca struk belanja, bon kasir, struk ATM, atau invoice di Indonesia.
@@ -70,29 +160,33 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 
   const candidateModels = [
     'gemini-3.8-flash',
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-flash-latest'
+    'gemini-3.5-flash'
   ];
 
-  const genAI = new GoogleGenerativeAI(apiKey);
+  const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
   const base64Data = imageBuffer.toString('base64');
   let rawJsonText = '';
   let lastError: any = null;
   const modelErrors: Array<{ model: string; status?: number; message: string }> = [];
 
-  for (const modelName of candidateModels) {
+  for (const modelName of genAI ? candidateModels : []) {
     for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
       try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent([
-          prompt,
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType
+        const model = genAI!.getGenerativeModel({ model: modelName });
+        const result = await Promise.race([
+          model.generateContent([
+            prompt,
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType
+              }
             }
-          }
+          ]),
+          new Promise<never>((_, reject) => setTimeout(
+            () => reject(Object.assign(new Error('Gemini request timed out.'), { status: 504 })),
+            GEMINI_REQUEST_TIMEOUT_MS
+          ))
         ]);
         rawJsonText = result.response.text().trim();
         if (rawJsonText) break;
@@ -120,8 +214,21 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
     if (rawJsonText) break;
   }
 
+  let extraction: ReceiptExtraction | undefined;
+  let scanProvider = 'Gemini';
+
   if (!rawJsonText) {
     console.error('[ReceiptScanner] All vision models failed:', modelErrors);
+    try {
+      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
+      scanProvider = 'OCR.Space';
+      console.info('[ReceiptScanner] Receipt extracted with OCR.Space fallback.');
+    } catch (ocrError: any) {
+      console.error('[ReceiptScanner] OCR.Space fallback failed:', ocrError);
+      lastError = lastError || ocrError;
+    }
+
+    if (!extraction) {
     const errorText = modelErrors.map((error) => `${error.status || ''} ${error.message}`).join(' ').toLowerCase();
     let failureHelp = 'Layanan AI gagal memproses gambar. Silakan coba lagi beberapa saat.';
 
@@ -141,17 +248,21 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       success: false,
       replyText: `⚠️ *Gagal Menganalisis Struk*\n\n${failureHelp}${lastError ? `\n\nKode error terakhir: ${lastError.status || lastError.statusCode || 'tidak tersedia'}.` : ''}`
     };
+    }
   }
-  console.log('[ReceiptScanner] Gemini Vision Output:', rawJsonText);
+  if (rawJsonText) console.log('[ReceiptScanner] Gemini Vision Output:', rawJsonText);
 
   try {
-    // Clean potential markdown wrap
-    let cleanJson = rawJsonText;
-    if (cleanJson.startsWith('```')) {
-      cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    if (!extraction) {
+      // Clean potential markdown wrap
+      let cleanJson = rawJsonText;
+      if (cleanJson.startsWith('```')) {
+        cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      }
+      extraction = JSON.parse(cleanJson) as ReceiptExtraction;
     }
 
-    const data = JSON.parse(cleanJson);
+    const data = extraction;
     const amount = Number(data.total_amount) || 0;
 
     if (amount <= 0) {
