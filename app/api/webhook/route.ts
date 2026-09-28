@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
           const buffer = Buffer.from(arrayBuffer);
 
           // 3. Scan receipt with Gemini Vision & auto-record to Google Sheets
-          const scanResult = await scanReceiptImage(buffer, mimeType);
+          const scanResult = await scanReceiptImage(buffer, mimeType, from);
 
           // 4. Send reply
           const templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'catatan_transaksi';

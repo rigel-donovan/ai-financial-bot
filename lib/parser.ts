@@ -342,7 +342,7 @@ export function parseMessage(
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(cleanPrefix) ||
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
-      /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month)\s+(?:list|daftar|rincian|semua)$/i.test(lower)
+      /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower)
     );
 
   if (isQueryOrReport) {

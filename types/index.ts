@@ -2,6 +2,7 @@ export type TransactionType = 'expense' | 'income';
 
 export interface Transaction {
   id: string;
+  user_id?: string;
   type: TransactionType;
   amount: number;
   category: string;
@@ -13,6 +14,7 @@ export interface Transaction {
 
 export interface RecurringExpense {
   id: string;
+  user_id?: string;
   name: string;
   amount: number;
   category: string;

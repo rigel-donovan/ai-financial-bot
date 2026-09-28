@@ -52,7 +52,7 @@ export function formatDate(isoStr: string): string {
  */
 export async function handleUserMessage(
   rawText: string,
-  _senderPhone?: string
+  userId?: string
 ): Promise<ExecutionResult> {
   const categoryMap = await getCategoryMappings();
   let parsed: ParsedIntent = parseMessage(rawText, categoryMap);
@@ -71,45 +71,45 @@ export async function handleUserMessage(
 
   switch (parsed.intent) {
     case 'RECORD_EXPENSE':
-      return await handleRecordExpense(parsed);
+      return await handleRecordExpense(parsed, userId);
 
     case 'RECORD_INCOME':
-      return await handleRecordIncome(parsed);
+      return await handleRecordIncome(parsed, userId);
 
     case 'SUMMARY_DAY':
     case 'SUMMARY_WEEK':
     case 'SUMMARY_MONTH':
-      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate);
+      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate, userId);
 
     case 'LIST_EXPENSES':
-      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate);
+      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
 
     case 'LIST_INCOMES':
-      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate);
+      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
 
     case 'LIST_ALL':
-      return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate);
+      return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId);
 
     case 'DELETE_LAST':
-      return await handleDeleteLast(parsed);
+      return await handleDeleteLast(parsed, userId);
 
     case 'EDIT_LAST':
-      return await handleEditLast(parsed);
+      return await handleEditLast(parsed, userId);
 
     case 'MENU':
-      return handleMenu();
+      return handleMenu(userId);
 
     case 'AI_ADVICE':
-      return await handleAiAdvice();
+      return await handleAiAdvice(userId);
 
     case 'ADD_RECURRING':
-      return await handleAddRecurring(parsed);
+      return await handleAddRecurring(parsed, userId);
 
     case 'LIST_RECURRING':
-      return await handleListRecurring();
+      return await handleListRecurring(userId);
 
     case 'DELETE_RECURRING':
-      return await handleDeleteRecurring(parsed.name || '');
+      return await handleDeleteRecurring(parsed.name || '', userId);
 
     case 'HELP_RECURRING':
       return handleHelpRecurring();
@@ -124,7 +124,7 @@ export async function handleUserMessage(
 /**
  * Handle expense recording
  */
-async function handleRecordExpense(parsed: ParsedIntent): Promise<ExecutionResult> {
+async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promise<ExecutionResult> {
   if (!parsed.amount) {
     return {
       success: false,
@@ -134,6 +134,7 @@ async function handleRecordExpense(parsed: ParsedIntent): Promise<ExecutionResul
 
   const tx: Transaction = {
     id: crypto.randomUUID(),
+    user_id: userId,
     type: 'expense',
     amount: parsed.amount,
     category: parsed.category || 'Lainnya',
@@ -158,7 +159,7 @@ async function handleRecordExpense(parsed: ParsedIntent): Promise<ExecutionResul
 /**
  * Handle income recording
  */
-async function handleRecordIncome(parsed: ParsedIntent): Promise<ExecutionResult> {
+async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promise<ExecutionResult> {
   if (!parsed.amount) {
     return {
       success: false,
@@ -168,6 +169,7 @@ async function handleRecordIncome(parsed: ParsedIntent): Promise<ExecutionResult
 
   const tx: Transaction = {
     id: crypto.randomUUID(),
+    user_id: userId,
     type: 'income',
     amount: parsed.amount,
     category: parsed.category || 'Income',
@@ -211,9 +213,10 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
 async function handleSummary(
   period: 'day' | 'week' | 'month',
   targetDate?: string,
-  displayDate?: string
+  displayDate?: string,
+  userId?: string
 ): Promise<ExecutionResult> {
-  const transactions = await getAllTransactions();
+  const transactions = await getAllTransactions(userId);
   const now = new Date();
 
   let filtered: Transaction[];
@@ -317,9 +320,10 @@ async function handleListTransactions(
   type: 'expense' | 'income',
   period: 'day' | 'week' | 'month',
   targetDate?: string,
-  displayDate?: string
+  displayDate?: string,
+  userId?: string
 ): Promise<ExecutionResult> {
-  const transactions = await getAllTransactions();
+  const transactions = await getAllTransactions(userId);
   const now = new Date();
 
   let titlePeriod = '';
@@ -419,9 +423,10 @@ async function handleListTransactions(
 async function handleListAllTransactions(
   period: 'day' | 'week' | 'month',
   targetDate?: string,
-  displayDate?: string
+  displayDate?: string,
+  userId?: string
 ): Promise<ExecutionResult> {
-  const transactions = await getAllTransactions();
+  const transactions = await getAllTransactions(userId);
   const now = new Date();
 
   let titlePeriod = '';
@@ -528,13 +533,12 @@ async function handleListAllTransactions(
 /**
  * Handle delete last transaction
  */
-async function handleDeleteLast(parsed?: ParsedIntent): Promise<ExecutionResult> {
-  const criteria = parsed
-    ? {
-        amount: parsed.amount,
-        query: parsed.note
-      }
-    : undefined;
+async function handleDeleteLast(parsed?: ParsedIntent, userId?: string): Promise<ExecutionResult> {
+  const criteria = {
+    amount: parsed?.amount,
+    query: parsed?.note,
+    userId
+  };
 
   const deleted = await deleteTransaction(criteria);
   if (!deleted) {
@@ -558,7 +562,7 @@ async function handleDeleteLast(parsed?: ParsedIntent): Promise<ExecutionResult>
 /**
  * Handle edit last transaction amount
  */
-async function handleEditLast(parsed: ParsedIntent): Promise<ExecutionResult> {
+async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<ExecutionResult> {
   const newAmount = parsed.amount;
   const newNote = parsed.note;
   const targetQuery = parsed.name;
@@ -575,10 +579,11 @@ async function handleEditLast(parsed: ParsedIntent): Promise<ExecutionResult> {
   const newCategory = detected && detected !== 'Lainnya' ? detected : undefined;
 
   const result = await editTransaction({
-    criteria: targetQuery ? { query: targetQuery } : undefined,
+    criteria: targetQuery ? { query: targetQuery, userId } : undefined,
     newAmount: newAmount && newAmount > 0 ? newAmount : undefined,
     newNote,
-    newCategory
+    newCategory,
+    userId
   });
 
   if (!result) {
@@ -616,10 +621,11 @@ async function handleEditLast(parsed: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle interactive menu
  */
-function handleMenu(): ExecutionResult {
+function handleMenu(userId?: string): ExecutionResult {
   const headerText = '🤖 Expense Bot Menu';
+  const userTag = userId ? `\n👤 *ID Akun:* \`${userId}\` _(Data terpisah & aman)_` : '';
   const bodyText =
-    `Pilih perintah cepat atau ketik santai di chat (bebas format):\n\n` +
+    `Pilih perintah cepat atau ketik santai di chat (bebas format):${userTag}\n\n` +
     `*Catat Transaksi Santai:*\n` +
     `• \`beli kopi 25rb\` / \`kopi 20k\`\n` +
     `• \`beli bensin 50k\` / \`bensin 50rb\`\n` +
@@ -678,8 +684,8 @@ function handleMenu(): ExecutionResult {
 /**
  * Handle AI financial advice
  */
-async function handleAiAdvice(): Promise<ExecutionResult> {
-  const transactions = await getAllTransactions();
+async function handleAiAdvice(userId?: string): Promise<ExecutionResult> {
+  const transactions = await getAllTransactions(userId);
   // Filter last 30 days
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -699,7 +705,7 @@ async function handleAiAdvice(): Promise<ExecutionResult> {
 /**
  * Handle adding a recurring expense
  */
-async function handleAddRecurring(parsed: ParsedIntent): Promise<ExecutionResult> {
+async function handleAddRecurring(parsed: ParsedIntent, userId?: string): Promise<ExecutionResult> {
   if (!parsed.name || !parsed.amount || !parsed.dueDate) {
     return {
       success: false,
@@ -711,6 +717,7 @@ async function handleAddRecurring(parsed: ParsedIntent): Promise<ExecutionResult
 
   const item: RecurringExpense = {
     id: crypto.randomUUID(),
+    user_id: userId,
     name: formattedName,
     amount: parsed.amount,
     category: parsed.category || 'Bills',
@@ -736,8 +743,8 @@ async function handleAddRecurring(parsed: ParsedIntent): Promise<ExecutionResult
 /**
  * Handle listing active recurring expenses
  */
-async function handleListRecurring(): Promise<ExecutionResult> {
-  const list = await getRecurringExpenses();
+async function handleListRecurring(userId?: string): Promise<ExecutionResult> {
+  const list = await getRecurringExpenses(userId);
   const activeList = list.filter(r => r.active);
 
   if (activeList.length === 0) {
@@ -772,7 +779,7 @@ async function handleListRecurring(): Promise<ExecutionResult> {
 /**
  * Handle disabling a recurring expense
  */
-async function handleDeleteRecurring(name: string): Promise<ExecutionResult> {
+async function handleDeleteRecurring(name: string, userId?: string): Promise<ExecutionResult> {
   if (!name) {
     return {
       success: false,
@@ -781,7 +788,7 @@ async function handleDeleteRecurring(name: string): Promise<ExecutionResult> {
   }
 
   const displayName = name.charAt(0).toUpperCase() + name.slice(1);
-  const ok = await toggleRecurringExpense(name, false);
+  const ok = await toggleRecurringExpense(name, false, userId);
   if (!ok) {
     return {
       success: false,

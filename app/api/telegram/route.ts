@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
             const arrayBuffer = await imageRes.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
 
-            const scanResult = await scanReceiptImage(buffer, 'image/jpeg');
+            const scanResult = await scanReceiptImage(buffer, 'image/jpeg', String(chatId));
             await sendTelegramTextMessage({
               chatId,
               text: scanResult.replyText
@@ -88,8 +88,9 @@ export async function POST(req: NextRequest) {
     // Special command: /start or /bantuan
     if (userText === '/start' || userText === '/help' || userText.toLowerCase() === 'bantuan') {
       const welcome = 
-        `👋 *Halo! Saya Bot Catatan Keuangan Anda.*\n\n` +
-        `Bot ini terhubung langsung ke Google Sheets Anda secara live!\n\n` +
+        `👋 *Halo! Saya Bot Catatan Keuangan Pribadi Anda.*\n\n` +
+        `👤 *ID Pengguna Anda:* \`${chatId}\`\n` +
+        `🔒 *Privasi:* Data keuangan Anda terisolasi & terpisah secara otomatis di Google Sheets.\n\n` +
         `💡 *Bebas Chat Tanpa Format Kaku:*\n` +
         `• \`beli kopi 25rb\` atau \`kopi 20k\`\n` +
         `• \`bensin 50k\` atau \`beli bensin 50.000\`\n` +
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
         `• \`bayar listrik 150 ribu\`\n` +
         `• \`gajian 5.000.000\` atau \`dapat transferan 500rb\`\n` +
         `• \`pengeluaran hari ini\` atau \`saldo sekarang\`\n` +
+        `• \`list langganan\` / \`langganan netflix 186k tgl 5\`\n` +
         `• \`saran\` (AI Financial Advisor)\n` +
         `• Atau *kirim foto struk belanja* 📷\n\n` +
         `Coba ketik transaksi Anda sekarang santai saja!`;

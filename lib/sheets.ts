@@ -84,6 +84,10 @@ export function isSheetsConfigured(): boolean {
 /**
  * Automatically create required tabs & header rows if spreadsheet is empty
  */
+/**
+ * Automatically create required tabs & header rows if spreadsheet is empty
+ * or migrate existing legacy 8-column rows to 9-column (with user_id)
+ */
 export async function ensureSheetStructure(): Promise<void> {
   const client = getSheetsClient();
   if (!client) return;
@@ -112,37 +116,107 @@ export async function ensureSheetStructure(): Promise<void> {
       });
     }
 
-    // Set headers if empty
+    // 1. Transactions Sheet Header & Migration
     const txHeader = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A1:H1'
+      range: 'transactions!A1:I1'
     });
-    if (!txHeader.data.values || txHeader.data.values.length === 0) {
+    const txRow0 = txHeader.data.values?.[0] || [];
+
+    if (txRow0.length === 0) {
+      // Empty sheet
       await sheets.spreadsheets.values.update({
         spreadsheetId: sheetId,
-        range: 'transactions!A1:H1',
+        range: 'transactions!A1:I1',
         valueInputOption: 'USER_ENTERED',
         requestBody: {
-          values: [['id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at']]
+          values: [['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at']]
         }
       });
+    } else if (txRow0[1] !== 'user_id') {
+      // Legacy 8-column header (missing user_id at Col B) -> migrate rows
+      const allTxRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: 'transactions!A:H'
+      });
+      const allRows = allTxRes.data.values || [];
+      if (allRows.length > 0) {
+        const defaultUser = process.env.ALLOWED_PHONE_NUMBER || 'default_user';
+        const migratedRows = allRows.map((r, idx) => {
+          if (idx === 0) {
+            return ['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at'];
+          }
+          return [
+            r[0] || '', // id
+            r[8] || defaultUser, // user_id
+            r[1] || 'expense', // type
+            r[2] || '0', // amount
+            r[3] || 'Lainnya', // category
+            r[4] || '', // note
+            r[5] || '', // raw_message
+            r[6] || 'manual', // source
+            r[7] || new Date().toISOString() // created_at
+          ];
+        });
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: 'transactions!A1:I',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: migratedRows }
+        });
+      }
     }
 
+    // 2. Recurring Expenses Header & Migration
     const recHeader = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'recurring_expenses!A1:H1'
+      range: 'recurring_expenses!A1:I1'
     });
-    if (!recHeader.data.values || recHeader.data.values.length === 0) {
+    const recRow0 = recHeader.data.values?.[0] || [];
+
+    if (recRow0.length === 0) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: sheetId,
-        range: 'recurring_expenses!A1:H1',
+        range: 'recurring_expenses!A1:I1',
         valueInputOption: 'USER_ENTERED',
         requestBody: {
-          values: [['id', 'name', 'amount', 'category', 'due_date', 'active', 'last_run_date', 'created_at']]
+          values: [['id', 'user_id', 'name', 'amount', 'category', 'due_date', 'active', 'last_run_date', 'created_at']]
         }
       });
+    } else if (recRow0[1] !== 'user_id') {
+      const allRecRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: 'recurring_expenses!A:H'
+      });
+      const allRows = allRecRes.data.values || [];
+      if (allRows.length > 0) {
+        const defaultUser = process.env.ALLOWED_PHONE_NUMBER || 'default_user';
+        const migratedRows = allRows.map((r, idx) => {
+          if (idx === 0) {
+            return ['id', 'user_id', 'name', 'amount', 'category', 'due_date', 'active', 'last_run_date', 'created_at'];
+          }
+          return [
+            r[0] || '',
+            r[8] || defaultUser,
+            r[1] || '',
+            r[2] || '0',
+            r[3] || 'Bills',
+            r[4] || '1',
+            r[5] || 'TRUE',
+            r[6] || '',
+            r[7] || new Date().toISOString()
+          ];
+        });
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: 'recurring_expenses!A1:I',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: migratedRows }
+        });
+      }
     }
 
+    // 3. Categories Sheet
     const catHeader = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'categories!A1:B1'
@@ -183,13 +257,14 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
   const { sheets, sheetId } = client;
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: 'transactions!A:H',
+    range: 'transactions!A:I',
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: {
       values: [
         [
           tx.id,
+          tx.user_id || '',
           tx.type,
           tx.amount,
           tx.category,
@@ -204,11 +279,14 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
 }
 
 /**
- * Fetch all transactions from sheet
+ * Fetch all transactions from sheet, optionally filtered by user_id
  */
-export async function getAllTransactions(): Promise<Transaction[]> {
+export async function getAllTransactions(userId?: string): Promise<Transaction[]> {
   const client = getSheetsClient();
   if (!client) {
+    if (userId) {
+      return mockStore.transactions.filter(t => t.user_id === userId);
+    }
     return [...mockStore.transactions];
   }
 
@@ -216,20 +294,43 @@ export async function getAllTransactions(): Promise<Transaction[]> {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:H'
+      range: 'transactions!A2:I'
     });
 
     const rows = res.data.values || [];
-    return rows.map((r) => ({
-      id: r[0] || '',
-      type: (r[1] as 'expense' | 'income') || 'expense',
-      amount: parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: r[3] || 'Lainnya',
-      note: r[4] || '',
-      raw_message: r[5] || '',
-      source: (r[6] as 'manual' | 'recurring') || 'manual',
-      created_at: r[7] || new Date().toISOString()
-    }));
+    const all = rows.map((r) => {
+      if (r.length >= 9 || r[2] === 'expense' || r[2] === 'income') {
+        return {
+          id: r[0] || '',
+          user_id: r[1] || '',
+          type: (r[2] as 'expense' | 'income') || 'expense',
+          amount: parseInt((r[3] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: r[4] || 'Lainnya',
+          note: r[5] || '',
+          raw_message: r[6] || '',
+          source: (r[7] as 'manual' | 'recurring') || 'manual',
+          created_at: r[8] || new Date().toISOString()
+        };
+      } else {
+        return {
+          id: r[0] || '',
+          user_id: '',
+          type: (r[1] as 'expense' | 'income') || 'expense',
+          amount: parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: r[3] || 'Lainnya',
+          note: r[4] || '',
+          raw_message: r[5] || '',
+          source: (r[6] as 'manual' | 'recurring') || 'manual',
+          created_at: r[7] || new Date().toISOString()
+        };
+      }
+    });
+
+    if (userId) {
+      return all.filter(t => t.user_id === userId);
+    }
+
+    return all;
   } catch (err) {
     console.error('Error reading transactions from sheet:', err);
     return [];
@@ -237,45 +338,36 @@ export async function getAllTransactions(): Promise<Transaction[]> {
 }
 
 /**
- * Delete a transaction (either by matching criteria or the latest one)
+ * Delete a transaction (either by matching criteria or the latest one for the given user)
  */
 export async function deleteTransaction(criteria?: {
   amount?: number;
   query?: string;
+  userId?: string;
 }): Promise<Transaction | null> {
+  const targetUserId = criteria?.userId;
   const client = getSheetsClient();
+
   if (!client) {
     if (mockStore.transactions.length === 0) return null;
-    if (!criteria || (!criteria.amount && !criteria.query)) {
-      return mockStore.transactions.pop() || null;
-    }
-    // 1. Dual match: amount & query
-    if (criteria.amount && criteria.query) {
-      const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
-        const tx = mockStore.transactions[i];
-        const text = `${tx.category} ${tx.note} ${tx.raw_message}`.toLowerCase();
-        if (tx.amount === criteria.amount && words.some((w) => text.includes(w))) {
-          return mockStore.transactions.splice(i, 1)[0];
-        }
+    for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+      const tx = mockStore.transactions[i];
+      if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
+        continue;
       }
-    }
-    // 2. Match by amount
-    if (criteria.amount) {
-      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
-        if (mockStore.transactions[i].amount === criteria.amount) {
-          return mockStore.transactions.splice(i, 1)[0];
-        }
+      if (!criteria || (!criteria.amount && !criteria.query)) {
+        return mockStore.transactions.splice(i, 1)[0];
       }
-    }
-    // 3. Match by query
-    if (criteria.query) {
-      const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
-        const text = `${mockStore.transactions[i].category} ${mockStore.transactions[i].note} ${mockStore.transactions[i].raw_message}`.toLowerCase();
-        if (words.some((w) => text.includes(w))) {
+      const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
+      const text = `${tx.category} ${tx.note} ${tx.raw_message}`.toLowerCase();
+      if (criteria.amount && criteria.query) {
+        if (tx.amount === criteria.amount && words.some(w => text.includes(w))) {
           return mockStore.transactions.splice(i, 1)[0];
         }
+      } else if (criteria.amount && tx.amount === criteria.amount) {
+        return mockStore.transactions.splice(i, 1)[0];
+      } else if (criteria.query && words.some(w => text.includes(w))) {
+        return mockStore.transactions.splice(i, 1)[0];
       }
     }
     return null;
@@ -285,7 +377,7 @@ export async function deleteTransaction(criteria?: {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:H'
+      range: 'transactions!A2:I'
     });
 
     const rows = res.data.values || [];
@@ -293,80 +385,81 @@ export async function deleteTransaction(criteria?: {
 
     let targetIdx = -1;
 
-    if (criteria && (criteria.amount || criteria.query)) {
-      // 1. Dual match: amount & query
-      if (criteria.amount && criteria.query) {
-        const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const r = rows[i];
-          const rAmount = parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
-          const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
-          if (rAmount === criteria.amount && words.some((w) => text.includes(w))) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
+      const rowUserId = is9Col ? (r[1] || '') : '';
+      if (targetUserId && rowUserId && rowUserId !== targetUserId) {
+        continue;
+      }
+
+      const rAmount = parseInt((is9Col ? r[3] : r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
+      const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
+
+      if (criteria && (criteria.amount || criteria.query)) {
+        const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
+        if (criteria.amount && criteria.query) {
+          if (rAmount === criteria.amount && words.some(w => text.includes(w))) {
             targetIdx = i;
             break;
           }
+        } else if (criteria.amount && rAmount === criteria.amount) {
+          targetIdx = i;
+          break;
+        } else if (criteria.query && words.some(w => text.includes(w))) {
+          targetIdx = i;
+          break;
         }
+      } else {
+        // No criteria -> latest transaction for this user
+        targetIdx = i;
+        break;
       }
+    }
 
-      // 2. Match by amount
-      if (targetIdx === -1 && criteria.amount) {
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const r = rows[i];
-          const rAmount = parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
-          if (rAmount === criteria.amount) {
-            targetIdx = i;
-            break;
-          }
-        }
-      }
-
-      // 3. Match by query
-      if (targetIdx === -1 && criteria.query) {
-        const words = criteria.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const r = rows[i];
-          const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
-          if (words.some((w) => text.includes(w))) {
-            targetIdx = i;
-            break;
-          }
-        }
-      }
-
-      // If user provided a specific search and no match found, do NOT delete an arbitrary row!
-      if (targetIdx === -1) {
-        return null;
-      }
-    } else {
-      // No criteria specified (e.g. "hapus terakhir" / "undo") -> delete the last row
-      targetIdx = rows.length - 1;
+    if (targetIdx === -1) {
+      return null;
     }
 
     const rowToDelete = rows[targetIdx];
-    const deleted: Transaction = {
-      id: rowToDelete[0] || '',
-      type: (rowToDelete[1] as any) || 'expense',
-      amount: parseInt((rowToDelete[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: rowToDelete[3] || '',
-      note: rowToDelete[4] || '',
-      raw_message: rowToDelete[5] || '',
-      source: (rowToDelete[6] as any) || 'manual',
-      created_at: rowToDelete[7] || ''
-    };
+    const is9Col = rowToDelete.length >= 9 || rowToDelete[2] === 'expense' || rowToDelete[2] === 'income';
+    const deleted: Transaction = is9Col
+      ? {
+          id: rowToDelete[0] || '',
+          user_id: rowToDelete[1] || '',
+          type: (rowToDelete[2] as any) || 'expense',
+          amount: parseInt((rowToDelete[3] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: rowToDelete[4] || '',
+          note: rowToDelete[5] || '',
+          raw_message: rowToDelete[6] || '',
+          source: (rowToDelete[7] as any) || 'manual',
+          created_at: rowToDelete[8] || ''
+        }
+      : {
+          id: rowToDelete[0] || '',
+          user_id: '',
+          type: (rowToDelete[1] as any) || 'expense',
+          amount: parseInt((rowToDelete[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: rowToDelete[3] || '',
+          note: rowToDelete[4] || '',
+          raw_message: rowToDelete[5] || '',
+          source: (rowToDelete[6] as any) || 'manual',
+          created_at: rowToDelete[7] || ''
+        };
 
-    // If deleting the last row, clearing that row is fastest
+    // If deleting the last row of the sheet
     if (targetIdx === rows.length - 1) {
       const lastRowIndex = rows.length + 1;
       await sheets.spreadsheets.values.clear({
         spreadsheetId: sheetId,
-        range: `transactions!A${lastRowIndex}:H${lastRowIndex}`
+        range: `transactions!A${lastRowIndex}:I${lastRowIndex}`
       });
     } else {
-      // Remove from array and rewrite transactions!A2:H
+      // Remove from array and rewrite transactions!A2:I
       rows.splice(targetIdx, 1);
       await sheets.spreadsheets.values.clear({
         spreadsheetId: sheetId,
-        range: 'transactions!A2:H'
+        range: 'transactions!A2:I'
       });
       if (rows.length > 0) {
         await sheets.spreadsheets.values.update({
@@ -388,21 +481,23 @@ export async function deleteTransaction(criteria?: {
 /**
  * Delete the latest transaction (convenience alias)
  */
-export async function deleteLatestTransaction(): Promise<Transaction | null> {
-  return deleteTransaction();
+export async function deleteLatestTransaction(userId?: string): Promise<Transaction | null> {
+  return deleteTransaction({ userId });
 }
 
 export interface EditTransactionOptions {
   criteria?: {
     query?: string;
+    userId?: string;
   };
   newAmount?: number;
   newNote?: string;
   newCategory?: string;
+  userId?: string;
 }
 
 /**
- * Edit a transaction (amount, note, or category)
+ * Edit a transaction (amount, note, or category), scoped to a specific user
  */
 export async function editTransaction(
   options: EditTransactionOptions | number
@@ -410,14 +505,19 @@ export async function editTransaction(
   const opts: EditTransactionOptions =
     typeof options === 'number' ? { newAmount: options } : options;
 
+  const targetUserId = opts.userId || opts.criteria?.userId;
+
   const client = getSheetsClient();
   if (!client) {
     if (mockStore.transactions.length === 0) return null;
     let targetIdx = -1;
-    if (opts.criteria?.query) {
-      const q = opts.criteria.query.toLowerCase();
-      for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
-        const tx = mockStore.transactions[i];
+    for (let i = mockStore.transactions.length - 1; i >= 0; i--) {
+      const tx = mockStore.transactions[i];
+      if (targetUserId && tx.user_id && tx.user_id !== targetUserId) {
+        continue;
+      }
+      if (opts.criteria?.query) {
+        const q = opts.criteria.query.toLowerCase();
         if (
           tx.note.toLowerCase().includes(q) ||
           tx.category.toLowerCase().includes(q) ||
@@ -426,11 +526,12 @@ export async function editTransaction(
           targetIdx = i;
           break;
         }
+      } else {
+        targetIdx = i;
+        break;
       }
-      if (targetIdx === -1) return null;
-    } else {
-      targetIdx = mockStore.transactions.length - 1;
     }
+    if (targetIdx === -1) return null;
 
     const prev = { ...mockStore.transactions[targetIdx] };
     if (opts.newAmount !== undefined && opts.newAmount > 0) {
@@ -449,7 +550,7 @@ export async function editTransaction(
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:H'
+      range: 'transactions!A2:I'
     });
 
     const rows = res.data.values || [];
@@ -457,34 +558,55 @@ export async function editTransaction(
 
     let targetIdx = -1;
 
-    if (opts.criteria?.query) {
-      const q = opts.criteria.query.toLowerCase();
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const r = rows[i];
-        const text = `${r[3]} ${r[4]} ${r[5]}`.toLowerCase();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const is9Col = r.length >= 9 || r[2] === 'expense' || r[2] === 'income';
+      const rowUserId = is9Col ? (r[1] || '') : '';
+      if (targetUserId && rowUserId && rowUserId !== targetUserId) {
+        continue;
+      }
+
+      if (opts.criteria?.query) {
+        const q = opts.criteria.query.toLowerCase();
+        const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
         if (text.includes(q)) {
           targetIdx = i;
           break;
         }
+      } else {
+        targetIdx = i;
+        break;
       }
-      if (targetIdx === -1) {
-        return null;
-      }
-    } else {
-      targetIdx = rows.length - 1; // default to latest row
     }
 
+    if (targetIdx === -1) return null;
+
     const row = rows[targetIdx];
-    const previous: Transaction = {
-      id: row[0] || '',
-      type: (row[1] as any) || 'expense',
-      amount: parseInt((row[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: row[3] || '',
-      note: row[4] || '',
-      raw_message: row[5] || '',
-      source: (row[6] as any) || 'manual',
-      created_at: row[7] || ''
-    };
+    const is9Col = row.length >= 9 || row[2] === 'expense' || row[2] === 'income';
+
+    const previous: Transaction = is9Col
+      ? {
+          id: row[0] || '',
+          user_id: row[1] || '',
+          type: (row[2] as any) || 'expense',
+          amount: parseInt((row[3] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: row[4] || '',
+          note: row[5] || '',
+          raw_message: row[6] || '',
+          source: (row[7] as any) || 'manual',
+          created_at: row[8] || ''
+        }
+      : {
+          id: row[0] || '',
+          user_id: '',
+          type: (row[1] as any) || 'expense',
+          amount: parseInt((row[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: row[3] || '',
+          note: row[4] || '',
+          raw_message: row[5] || '',
+          source: (row[6] as any) || 'manual',
+          created_at: row[7] || ''
+        };
 
     const updatedAmount =
       opts.newAmount !== undefined && opts.newAmount > 0 ? opts.newAmount : previous.amount;
@@ -496,17 +618,29 @@ export async function editTransaction(
         ? 'Income'
         : previous.category;
 
-    const targetRowIndex = targetIdx + 2; // 1-indexed, +1 header
+    const targetRowIndex = targetIdx + 2;
 
-    // Update columns C (amount), D (category), E (note)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
-      range: `transactions!C${targetRowIndex}:E${targetRowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[updatedAmount, updatedCategory, updatedNote]]
-      }
-    });
+    if (is9Col) {
+      // In 9-column mode, columns D (amount), E (category), F (note)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: `transactions!D${targetRowIndex}:F${targetRowIndex}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[updatedAmount, updatedCategory, updatedNote]]
+        }
+      });
+    } else {
+      // Legacy columns C..E
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: `transactions!C${targetRowIndex}:E${targetRowIndex}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[updatedAmount, updatedCategory, updatedNote]]
+        }
+      });
+    }
 
     const updated: Transaction = {
       ...previous,
@@ -526,17 +660,21 @@ export async function editTransaction(
  * Edit the latest transaction amount (convenience alias)
  */
 export async function editLatestTransactionAmount(
-  newAmount: number
+  newAmount: number,
+  userId?: string
 ): Promise<{ previous: Transaction; updated: Transaction } | null> {
-  return editTransaction(newAmount);
+  return editTransaction({ newAmount, userId });
 }
 
 /**
- * Get all recurring expenses
+ * Get all recurring expenses, optionally filtered by user_id
  */
-export async function getRecurringExpenses(): Promise<RecurringExpense[]> {
+export async function getRecurringExpenses(userId?: string): Promise<RecurringExpense[]> {
   const client = getSheetsClient();
   if (!client) {
+    if (userId) {
+      return mockStore.recurring.filter(r => r.user_id === userId);
+    }
     return [...mockStore.recurring];
   }
 
@@ -544,20 +682,43 @@ export async function getRecurringExpenses(): Promise<RecurringExpense[]> {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'recurring_expenses!A2:H'
+      range: 'recurring_expenses!A2:I'
     });
 
     const rows = res.data.values || [];
-    return rows.map((r) => ({
-      id: r[0] || '',
-      name: r[1] || '',
-      amount: parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10),
-      category: r[3] || 'Lainnya',
-      due_date: parseInt(r[4] || '1', 10),
-      active: (r[5] || '').toString().toUpperCase() === 'TRUE',
-      last_run_date: r[6] || undefined,
-      created_at: r[7] || ''
-    }));
+    const all = rows.map((r) => {
+      if (r.length >= 9 || r[6] === 'TRUE' || r[6] === 'FALSE') {
+        return {
+          id: r[0] || '',
+          user_id: r[1] || '',
+          name: r[2] || '',
+          amount: parseInt((r[3] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: r[4] || 'Lainnya',
+          due_date: parseInt(r[5] || '1', 10),
+          active: (r[6] || '').toString().toUpperCase() === 'TRUE',
+          last_run_date: r[7] || undefined,
+          created_at: r[8] || ''
+        };
+      } else {
+        return {
+          id: r[0] || '',
+          user_id: '',
+          name: r[1] || '',
+          amount: parseInt((r[2] || '0').toString().replace(/[^\d]/g, ''), 10),
+          category: r[3] || 'Lainnya',
+          due_date: parseInt(r[4] || '1', 10),
+          active: (r[5] || '').toString().toUpperCase() === 'TRUE',
+          last_run_date: r[6] || undefined,
+          created_at: r[7] || ''
+        };
+      }
+    });
+
+    if (userId) {
+      return all.filter(r => r.user_id === userId);
+    }
+
+    return all;
   } catch (err) {
     console.error('Error getting recurring expenses:', err);
     return [];
@@ -577,13 +738,14 @@ export async function addRecurringExpense(item: RecurringExpense): Promise<void>
   const { sheets, sheetId } = client;
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: 'recurring_expenses!A:H',
+    range: 'recurring_expenses!A:I',
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: {
       values: [
         [
           item.id,
+          item.user_id || '',
           item.name,
           item.amount,
           item.category,
@@ -598,12 +760,14 @@ export async function addRecurringExpense(item: RecurringExpense): Promise<void>
 }
 
 /**
- * Toggle or disable recurring expense by name
+ * Toggle or disable recurring expense by name, scoped to user
  */
-export async function toggleRecurringExpense(name: string, active: boolean): Promise<boolean> {
+export async function toggleRecurringExpense(name: string, active: boolean, userId?: string): Promise<boolean> {
   const client = getSheetsClient();
   if (!client) {
-    const target = mockStore.recurring.find(r => r.name.toLowerCase() === name.toLowerCase());
+    const target = mockStore.recurring.find(
+      r => r.name.toLowerCase() === name.toLowerCase() && (!userId || !r.user_id || r.user_id === userId)
+    );
     if (target) {
       target.active = active;
       return true;
@@ -615,18 +779,27 @@ export async function toggleRecurringExpense(name: string, active: boolean): Pro
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'recurring_expenses!A2:H'
+      range: 'recurring_expenses!A2:I'
     });
 
     const rows = res.data.values || [];
-    const index = rows.findIndex(r => (r[1] || '').toString().trim().toLowerCase() === name.trim().toLowerCase());
+    const index = rows.findIndex((r) => {
+      const is9Col = r.length >= 9 || r[6] === 'TRUE' || r[6] === 'FALSE';
+      const rUserId = is9Col ? (r[1] || '') : '';
+      const rName = is9Col ? r[2] : r[1];
+      if (userId && rUserId && rUserId !== userId) return false;
+      return (rName || '').toString().trim().toLowerCase() === name.trim().toLowerCase();
+    });
 
     if (index === -1) return false;
 
     const rowNum = index + 2; // header is 1, 0-index + 2
+    const is9Col = rows[index].length >= 9 || rows[index][6] === 'TRUE' || rows[index][6] === 'FALSE';
+    const activeCol = is9Col ? 'G' : 'F';
+
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
-      range: `recurring_expenses!F${rowNum}`,
+      range: `recurring_expenses!${activeCol}${rowNum}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[active ? 'TRUE' : 'FALSE']]
@@ -655,7 +828,7 @@ export async function updateRecurringLastRun(id: string, dateStr: string): Promi
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'recurring_expenses!A2:H'
+      range: 'recurring_expenses!A2:I'
     });
 
     const rows = res.data.values || [];
@@ -663,9 +836,12 @@ export async function updateRecurringLastRun(id: string, dateStr: string): Promi
     if (index === -1) return;
 
     const rowNum = index + 2;
+    const is9Col = rows[index].length >= 9 || rows[index][6] === 'TRUE' || rows[index][6] === 'FALSE';
+    const lastRunCol = is9Col ? 'H' : 'G';
+
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
-      range: `recurring_expenses!G${rowNum}`,
+      range: `recurring_expenses!${lastRunCol}${rowNum}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[dateStr]]

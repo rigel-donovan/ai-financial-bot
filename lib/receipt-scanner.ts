@@ -17,7 +17,8 @@ export interface ScannedReceiptResult {
  */
 export async function scanReceiptImage(
   imageBuffer: Buffer,
-  mimeType: string = 'image/jpeg'
+  mimeType: string = 'image/jpeg',
+  userId?: string
 ): Promise<ScannedReceiptResult> {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -119,6 +120,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 
     const transaction: Transaction = {
       id: crypto.randomUUID(),
+      user_id: userId,
       type: 'expense',
       amount,
       category,

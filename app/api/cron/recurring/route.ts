@@ -9,6 +9,8 @@ import { sendWhatsAppTextMessage } from '@/lib/whatsapp';
 import { formatRp, formatDate } from '@/lib/transactions';
 import { Transaction } from '@/types';
 
+import { sendTelegramTextMessage } from '@/lib/telegram';
+
 /**
  * Endpoint called by Vercel Cron daily to process due recurring expenses
  */
@@ -43,7 +45,7 @@ export async function GET(req: NextRequest) {
     const allRecurring = await getRecurringExpenses();
     const activeList = allRecurring.filter(r => r.active);
 
-    const processedItems: { name: string; amount: number; category: string }[] = [];
+    const processedItems: { userId?: string; name: string; amount: number; category: string }[] = [];
 
     for (const item of activeList) {
       // Check if already run today
@@ -57,6 +59,7 @@ export async function GET(req: NextRequest) {
       if (currentDayOfMonth === effectiveDueDay) {
         const tx: Transaction = {
           id: crypto.randomUUID(),
+          user_id: item.user_id,
           type: 'expense',
           amount: item.amount,
           category: item.category || 'Bills',
@@ -73,6 +76,7 @@ export async function GET(req: NextRequest) {
         await updateRecurringLastRun(item.id, jakartaDateStr);
 
         processedItems.push({
+          userId: item.user_id,
           name: item.name,
           amount: item.amount,
           category: item.category
@@ -80,14 +84,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Send WhatsApp notification if any items were recorded
-    const recipientPhone = process.env.ALLOWED_PHONE_NUMBER || process.env.ADMIN_PHONE_NUMBER;
-    if (recipientPhone && processedItems.length > 0) {
-      const summaryList = processedItems
+    // Group by user and send notification
+    const userGroups = new Map<string, typeof processedItems>();
+    for (const p of processedItems) {
+      const u = p.userId || 'default';
+      if (!userGroups.has(u)) userGroups.set(u, []);
+      userGroups.get(u)!.push(p);
+    }
+
+    for (const [uid, items] of userGroups.entries()) {
+      const summaryList = items
         .map(p => `• *${p.name}:* ${formatRp(p.amount)} (${p.category})`)
         .join('\n');
 
-      const totalAmount = processedItems.reduce((s, p) => s + p.amount, 0);
+      const totalAmount = items.reduce((s, p) => s + p.amount, 0);
 
       const message =
         `🔁 *Pengeluaran Rutin Otomatis Tercatat*\n\n` +
@@ -96,10 +106,20 @@ export async function GET(req: NextRequest) {
         `💰 *Total:* ${formatRp(totalAmount)}\n\n` +
         `_Data telah otomatis disimpan ke Google Sheets._`;
 
-      await sendWhatsAppTextMessage({
-        to: recipientPhone,
-        body: message
-      });
+      if (uid !== 'default') {
+        if (/^\d{8,11}$/.test(uid)) {
+          // Telegram Chat ID
+          await sendTelegramTextMessage({ chatId: uid, text: message }).catch(() => {});
+        } else if (/^\d{10,16}$/.test(uid)) {
+          // WhatsApp phone
+          await sendWhatsAppTextMessage({ to: uid, body: message }).catch(() => {});
+        }
+      } else {
+        const recipientPhone = process.env.ALLOWED_PHONE_NUMBER || process.env.ADMIN_PHONE_NUMBER;
+        if (recipientPhone) {
+          await sendWhatsAppTextMessage({ to: recipientPhone, body: message }).catch(() => {});
+        }
+      }
     }
 
     return NextResponse.json({

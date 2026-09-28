@@ -161,6 +161,41 @@ async function runTests() {
   console.assert(res13.success && res13.replyText.includes('Spotify'), 'res13 failed: ' + res13.replyText);
   console.log('Stop recurring via "stop langganan": OK');
 
+  console.log('--- 5. Testing Multi-User Data Isolation ---');
+  // User A records 30k coffee
+  await handleUserMessage('kopi 30rb', 'user_A');
+  // User B records 100k book
+  await handleUserMessage('buku 100rb', 'user_B');
+
+  // User A summary should only show 30k
+  const summaryA = await handleUserMessage('pengeluaran hari ini', 'user_A');
+  console.assert(summaryA.success && summaryA.replyText.includes('Rp30.000') && !summaryA.replyText.includes('Rp100.000'), 'User A data isolation failed: ' + summaryA.replyText);
+
+  // User B summary should only show 100k
+  const summaryB = await handleUserMessage('pengeluaran hari ini', 'user_B');
+  console.assert(summaryB.success && summaryB.replyText.includes('Rp100.000') && !summaryB.replyText.includes('Rp30.000'), 'User B data isolation failed: ' + summaryB.replyText);
+
+  // User A adds subscription
+  await handleUserMessage('langganan netflix 186k tgl 5', 'user_A');
+
+  // User B checks subscriptions -> should NOT see Netflix
+  const listB = await handleUserMessage('list langganan', 'user_B');
+  console.assert(listB.success && !listB.replyText.includes('Netflix'), 'User B should not see User A subscriptions: ' + listB.replyText);
+
+  // User A checks subscriptions -> should see Netflix
+  const listA = await handleUserMessage('list langganan', 'user_A');
+  console.assert(listA.success && listA.replyText.includes('Netflix'), 'User A should see Netflix: ' + listA.replyText);
+
+  // User B deletes their last transaction
+  const delB = await handleUserMessage('hapus terakhir', 'user_B');
+  console.assert(delB.success && delB.replyText.includes('Rp100.000'), 'User B delete last failed: ' + delB.replyText);
+
+  // User A's transaction should still be intact
+  const verifyA = await handleUserMessage('pengeluaran hari ini', 'user_A');
+  console.assert(verifyA.success && verifyA.replyText.includes('Rp30.000'), 'User A transaction was improperly deleted: ' + verifyA.replyText);
+
+  console.log('Multi-user data isolation: OK');
+
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! EVERYTHING WORKS & MAKES SENSE.');
 }
 
