@@ -63,10 +63,16 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
-  const totalLine = [...lines]
-    .reverse()
-    .find((line) => /\b(?:grand\s*)?total(?:\s+(?:harga|bayar|payment))?\b/i.test(line));
-  const total = totalLine ? extractAmountFromOcrLine(totalLine) : 0;
+  const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)\b|\b(?:amount|balance)\s+due\b/i;
+  let total = 0;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (!totalLabel.test(lines[index])) continue;
+    total = extractAmountFromOcrLine(lines[index]);
+    if (!total && lines[index + 1]) {
+      total = extractAmountFromOcrLine(lines[index + 1]);
+    }
+    if (total > 0) break;
+  }
 
   if (total <= 0) {
     throw new Error('OCR.Space tidak menemukan baris total pembayaran pada struk.');
@@ -216,6 +222,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 
   let extraction: ReceiptExtraction | undefined;
   let scanProvider = 'Gemini';
+  let ocrFailure: unknown;
 
   if (!rawJsonText) {
     console.error('[ReceiptScanner] All vision models failed:', modelErrors);
@@ -225,7 +232,8 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       console.info('[ReceiptScanner] Receipt extracted with OCR.Space fallback.');
     } catch (ocrError: any) {
       console.error('[ReceiptScanner] OCR.Space fallback failed:', ocrError);
-      lastError = lastError || ocrError;
+      ocrFailure = ocrError;
+      lastError = ocrError;
     }
 
     if (!extraction) {
@@ -244,9 +252,34 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       failureHelp = 'Layanan Gemini sedang sibuk atau melewati batas waktu. Coba kirim foto struk lagi sebentar lagi.';
     }
 
+    const ocrMessage = ocrFailure instanceof Error ? ocrFailure.message : String(ocrFailure || '');
+    const ocrStatus = getGeminiErrorStatus(ocrFailure);
+    if (ocrFailure) {
+      if (/OCR_SPACE_API_KEY belum diatur/i.test(ocrMessage)) {
+        failureHelp = 'Gemini gagal dan OCR.Space tidak menemukan OCR_SPACE_API_KEY pada environment deployment. Pastikan key tersedia di Production lalu deploy ulang.';
+      } else if (/tidak menemukan baris total pembayaran/i.test(ocrMessage)) {
+        failureHelp = 'Gemini gagal dan OCR.Space tidak dapat mengenali total pembayaran pada struk. Pastikan bagian jumlah yang harus dibayar terlihat jelas dan kirim foto yang lebih tajam.';
+      } else if (ocrStatus === 401 || ocrStatus === 403) {
+        failureHelp = 'Gemini gagal dan OCR.Space menolak API key. Periksa OCR_SPACE_API_KEY dan status akun OCR.Space.';
+      } else if (ocrStatus === 429) {
+        failureHelp = 'Gemini gagal dan batas kuota atau laju permintaan OCR.Space juga tercapai. Coba lagi setelah kuota pulih.';
+      } else {
+        failureHelp = `Gemini gagal dan OCR.Space juga tidak berhasil memproses struk${ocrStatus ? ` (HTTP ${ocrStatus})` : ''}. Periksa status OCR.Space dan coba foto yang lebih jelas.`;
+      }
+    }
+
+    const diagnosticLines = [
+      modelErrors.at(-1)?.status ? `Kode Gemini terakhir: ${modelErrors.at(-1)?.status}.` : '',
+      ocrFailure
+        ? ocrStatus
+          ? `Kode OCR.Space: ${ocrStatus}.`
+          : `Detail OCR.Space: ${ocrMessage}`
+        : ''
+    ].filter(Boolean);
+
     return {
       success: false,
-      replyText: `⚠️ *Gagal Menganalisis Struk*\n\n${failureHelp}${lastError ? `\n\nKode error terakhir: ${lastError.status || lastError.statusCode || 'tidak tersedia'}.` : ''}`
+      replyText: `⚠️ *Gagal Menganalisis Struk*\n\n${failureHelp}${diagnosticLines.length ? `\n\n${diagnosticLines.join('\n')}` : ''}`
     };
     }
   }

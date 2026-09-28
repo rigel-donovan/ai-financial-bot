@@ -1,5 +1,6 @@
 import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
+import { scanReceiptImage } from '../lib/receipt-scanner';
 
 const assertionFailures = [];
 const originalAssert = console.assert.bind(console);
@@ -151,6 +152,35 @@ async function runTests() {
 
   const p34 = parseQueryDate('struk tanggal 27 september 2026');
   console.assert(p34 && p34.targetDate === '2026-09-27', 'p34 failed: ' + JSON.stringify(p34));
+
+  const previousOcrKey = process.env.OCR_SPACE_API_KEY;
+  const previousGeminiKey = process.env.GEMINI_API_KEY;
+  const previousFetch = globalThis.fetch;
+  let ocrParsedText = 'SPBU PERTAMINA\nJumlah Pembayaran\nRp 100.000';
+  process.env.OCR_SPACE_API_KEY = 'test-ocr-key';
+  delete process.env.GEMINI_API_KEY;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      IsErroredOnProcessing: false,
+      ParsedResults: [{ ParsedText: ocrParsedText }]
+    })
+  });
+  try {
+    const ocrResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_fallback');
+    console.assert(ocrResult.success && ocrResult.transaction?.amount === 100000, 'OCR fallback failed: ' + ocrResult.replyText);
+    console.assert(ocrResult.transaction?.category === 'Transport', 'OCR category detection failed: ' + JSON.stringify(ocrResult.transaction));
+    ocrParsedText = 'SPBU PERTAMINA\nBENSIN 100.000';
+    const unreadableTotal = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_error');
+    console.assert(!unreadableTotal.success && unreadableTotal.replyText.includes('OCR.Space tidak dapat mengenali total pembayaran'), 'OCR fallback error detail missing: ' + unreadableTotal.replyText);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousOcrKey === undefined) delete process.env.OCR_SPACE_API_KEY;
+    else process.env.OCR_SPACE_API_KEY = previousOcrKey;
+    if (previousGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousGeminiKey;
+  }
 
   console.log('✓ parseMessage passed!');
 
