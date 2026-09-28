@@ -23,7 +23,8 @@ function resolveReceiptDate(targetDate?: string): string {
 }
 
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 503]);
-const MAX_GEMINI_ATTEMPTS_PER_MODEL = 3;
+const MAX_GEMINI_ATTEMPTS_PER_MODEL = 2;
+const GEMINI_REQUEST_TIMEOUT_MS = 12_000;
 
 function getGeminiErrorStatus(err: any): number | undefined {
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
@@ -70,9 +71,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 
   const candidateModels = [
     'gemini-3.8-flash',
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-flash-latest'
+    'gemini-3.5-flash'
   ];
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -93,7 +92,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
               mimeType
             }
           }
-        ]);
+        ], { timeout: GEMINI_REQUEST_TIMEOUT_MS });
         rawJsonText = result.response.text().trim();
         if (rawJsonText) break;
       } catch (err: any) {
