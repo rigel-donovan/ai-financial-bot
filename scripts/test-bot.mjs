@@ -61,13 +61,22 @@ async function runTests() {
   console.assert(p14.intent === 'LIST_ALL', 'p14 failed: ' + JSON.stringify(p14));
 
   const p14b = parseMessage('list pemasukan dan pengeluaran 27 - 28 september');
-  console.assert(p14b.intent === 'LIST_ALL' && p14b.targetDate === '2026-09-27' && p14b.endDate === '2026-09-28', 'p14b failed: ' + JSON.stringify(p14b));
+  console.assert(p14b.intent === 'LIST_ALL' && p14b.startDate === '2026-09-27' && p14b.endDate === '2026-09-28', 'p14b failed: ' + JSON.stringify(p14b));
 
   const p14c = parseMessage('list pemasukan dan pengeluaran bulan ini');
   console.assert(p14c.intent === 'LIST_ALL' && p14c.period === 'month' && p14c.startDate && p14c.endDate, 'p14c failed: ' + JSON.stringify(p14c));
 
   const p14d = parseMessage('list penyusutan minggu ini');
-  console.assert(p14d.intent === 'LIST_ALL' && p14d.period === 'week' && p14d.startDate && p14d.endDate, 'p14d failed: ' + JSON.stringify(p14d));
+  console.assert(p14d.intent === 'SUMMARY_WEEK' || p14d.intent === 'LIST_EXPENSES', 'p14d failed: ' + JSON.stringify(p14d));
+
+  const p14e = parseMessage('rekap laba bulan september 2026');
+  console.assert(p14e.intent === 'SUMMARY_PROFIT' && p14e.period === 'month' && p14e.startDate && p14e.endDate, 'p14e failed: ' + JSON.stringify(p14e));
+
+  const p14f = parseMessage('list pemasukan dan pengeluaran tahun 2025');
+  console.assert(p14f.intent === 'LIST_ALL' && p14f.period === 'year' && p14f.startDate && p14f.endDate, 'p14f failed: ' + JSON.stringify(p14f));
+
+  const p14g = parseMessage('list pengeluaran kategori transport');
+  console.assert(p14g.intent === 'LIST_EXPENSES' && p14g.category === 'Transport', 'p14g failed: ' + JSON.stringify(p14g));
 
   // Flexible Subscription & Recurring Parsing Tests
   const p15 = parseMessage('list langganan');

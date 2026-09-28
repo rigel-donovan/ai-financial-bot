@@ -258,13 +258,14 @@ export async function handleUserMessage(
     case 'SUMMARY_DAY':
     case 'SUMMARY_WEEK':
     case 'SUMMARY_MONTH':
-      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
+    case 'SUMMARY_PROFIT':
+      return await handleSummary(parsed.period || 'month', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate, parsed.category, parsed.intent === 'SUMMARY_PROFIT');
 
     case 'LIST_EXPENSES':
-      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
+      return await handleListTransactions('expense', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate, parsed.category);
 
     case 'LIST_INCOMES':
-      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
+      return await handleListTransactions('income', parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate, parsed.category);
 
     case 'LIST_ALL':
       return await handleListAllTransactions(parsed.period || 'day', parsed.targetDate, parsed.displayDate, userId, parsed.startDate, parsed.endDate);
@@ -416,12 +417,14 @@ function resolveTransactionCreatedAt(targetDate?: string): string {
  * Handle summary reports (day, week, month) or specific target date
  */
 async function handleSummary(
-  period: 'day' | 'week' | 'month',
+  period: 'day' | 'week' | 'month' | 'year',
   targetDate?: string,
   displayDate?: string,
   userId?: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  category?: string,
+  forceProfitSummary = false
 ): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
   const now = new Date();
@@ -431,44 +434,50 @@ async function handleSummary(
 
   if (targetDate) {
     titlePeriod = displayDate || formatDateLabel(targetDate);
-    filtered = transactions.filter(t => matchesTargetDate(t.created_at, targetDate));
+    filtered = transactions.filter((t) => matchesTargetDate(t.created_at, targetDate));
   } else if (startDate && endDate) {
     titlePeriod = displayDate || formatDateRangeLabel(startDate, endDate, `${startDate} - ${endDate}`);
-    filtered = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
+    filtered = transactions.filter((t) => matchesDateRange(t.created_at, startDate, endDate));
   } else {
-    let startDate: Date;
+    let computedStart: Date;
+
     if (period === 'day') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
       titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
     } else if (period === 'week') {
-      // Start of week (Monday)
       const day = now.getDay() || 7;
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
-      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${computedStart.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else if (period === 'year') {
+      computedStart = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
+      titlePeriod = displayDate || `Tahun Ini (${now.getFullYear()})`;
     } else {
-      // Month
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
       titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
     }
 
-    filtered = transactions.filter(t => {
+    filtered = transactions.filter((t) => {
       try {
         const txDate = new Date(t.created_at);
-        return txDate >= startDate && txDate <= now;
+        return txDate >= computedStart && txDate <= now;
       } catch {
         return false;
       }
     });
   }
 
-  const expenses = filtered.filter(t => t.type === 'expense');
-  const incomes = filtered.filter(t => t.type === 'income');
+  if (category) {
+    filtered = filtered.filter((t) => t.category.toLowerCase() === category.toLowerCase());
+  }
+
+  const expenses = filtered.filter((t) => t.type === 'expense');
+  const incomes = filtered.filter((t) => t.type === 'income');
 
   const totalExpense = expenses.reduce((sum, t) => sum + t.amount, 0);
   const totalIncome = incomes.reduce((sum, t) => sum + t.amount, 0);
   const netSavings = totalIncome - totalExpense;
+  const isProfitSummary = forceProfitSummary || /laba|profit|keuntungan|untung|saldo\s+bersih/i.test(titlePeriod) || period === 'year';
 
-  // Breakdown by category
   const categoryTotals: Record<string, number> = {};
   for (const t of expenses) {
     categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
@@ -482,7 +491,6 @@ async function handleSummary(
     })
     .join('\n');
 
-  // Transactions list
   const itemsList = targetDate ? filtered : filtered.slice(-3).reverse();
   const recentLines = itemsList
     .map((t, idx) => {
@@ -504,10 +512,10 @@ async function handleSummary(
     .join('\n');
 
   let replyText =
-    `📊 *Ringkasan Transaksi — ${titlePeriod}*\n\n` +
+    `📊 *Ringkasan ${isProfitSummary ? 'Laba / Keuntungan' : 'Transaksi'} — ${titlePeriod}*\n\n` +
     `🔴 Total Pengeluaran: *${formatRp(totalExpense)}* (${expenses.length})\n` +
     `🟢 Total Pemasukan: *${formatRp(totalIncome)}* (${incomes.length})\n` +
-    `📈 Tabungan Bersih: *${formatRp(netSavings)}*\n` +
+    `📈 ${isProfitSummary ? 'Laba Bersih' : 'Tabungan Bersih'}: *${formatRp(netSavings)}*\n` +
     `📝 Total Transaksi: *${filtered.length}*\n\n`;
 
   if (categoryLines) {
@@ -528,12 +536,13 @@ async function handleSummary(
  */
 async function handleListTransactions(
   type: 'expense' | 'income',
-  period: 'day' | 'week' | 'month',
+  period: 'day' | 'week' | 'month' | 'year',
   targetDate?: string,
   displayDate?: string,
   userId?: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  category?: string
 ): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
   const now = new Date();
@@ -548,23 +557,26 @@ async function handleListTransactions(
     titlePeriod = displayDate || `${startDate} - ${endDate}`;
     inRange = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
   } else {
-    let startDate: Date;
+    let computedStart: Date;
     if (period === 'day') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
       titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })})`;
     } else if (period === 'week') {
       const day = now.getDay() || 7;
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
-      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${computedStart.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else if (period === 'year') {
+      computedStart = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
+      titlePeriod = displayDate || `Tahun Ini (${now.getFullYear()})`;
     } else {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
       titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
     }
 
     inRange = transactions.filter((t) => {
       try {
         const txDate = new Date(t.created_at);
-        return txDate >= startDate && txDate <= now;
+        return txDate >= computedStart && txDate <= now;
       } catch {
         return false;
       }
@@ -572,7 +584,10 @@ async function handleListTransactions(
   }
 
   // Filter exclusively by transaction type
-  const list = inRange.filter((t) => t.type === type);
+  let list = inRange.filter((t) => t.type === type);
+  if (category) {
+    list = list.filter((t) => t.category.toLowerCase() === category.toLowerCase());
+  }
   const isExpense = type === 'expense';
   const typeLabel = isExpense ? 'Pengeluaran' : 'Pemasukan';
   const emoji = isExpense ? '🔴' : '🟢';
@@ -636,7 +651,7 @@ async function handleListTransactions(
  * Handle combined full transaction list for both expenses and incomes
  */
 async function handleListAllTransactions(
-  period: 'day' | 'week' | 'month',
+  period: 'day' | 'week' | 'month' | 'year',
   targetDate?: string,
   displayDate?: string,
   userId?: string,
@@ -656,23 +671,26 @@ async function handleListAllTransactions(
     titlePeriod = displayDate || `${startDate} - ${endDate}`;
     inRange = transactions.filter(t => matchesDateRange(t.created_at, startDate, endDate));
   } else {
-    let startDate: Date;
+    let computedStart: Date;
     if (period === 'day') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
       titlePeriod = displayDate || `Hari Ini (${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })})`;
     } else if (period === 'week') {
       const day = now.getDay() || 7;
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
-      titlePeriod = displayDate || `Minggu Ini (${startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+      computedStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+      titlePeriod = displayDate || `Minggu Ini (${computedStart.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})`;
+    } else if (period === 'year') {
+      computedStart = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
+      titlePeriod = displayDate || `Tahun Ini (${now.getFullYear()})`;
     } else {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      computedStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
       titlePeriod = displayDate || `Bulan Ini (${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})`;
     }
 
     inRange = transactions.filter((t) => {
       try {
         const txDate = new Date(t.created_at);
-        return txDate >= startDate && txDate <= now;
+        return txDate >= computedStart && txDate <= now;
       } catch {
         return false;
       }

@@ -9,9 +9,10 @@ export const DEFAULT_CATEGORY_KEYWORDS: Record<string, string[]> = {
     'sate', 'martabak', 'boba', 'roti', 'seblak', 'cilok', 'bebek', 'ikan'
   ],
   Transport: [
-    'bensin', 'ojek', 'tol', 'grab', 'gojek', 'parkir', 'krl', 'mrt', 'busway',
+    'transport', 'bensin', 'ojek', 'tol', 'grab', 'gojek', 'parkir', 'krl', 'mrt', 'busway',
     'tiket', 'pertamax', 'pertalite', 'solar', 'angkot', 'taksi', 'kereta',
-    'motor', 'mobil', 'servis', 'service', 'tambal', 'cuci motor', 'cuci mobil'
+    'motor', 'mobil', 'servis', 'service', 'tambal', 'cuci motor', 'cuci mobil',
+    'bus', 'kereta api'
   ],
   Shopping: [
     'belanja', 'baju', 'shopee', 'tokped', 'tokopedia', 'celana', 'sepatu',
@@ -128,7 +129,7 @@ const MONTH_NAMES: Record<string, number> = {
 };
 
 export interface QueryDateResult {
-  period: 'day' | 'week' | 'month';
+  period: 'day' | 'week' | 'month' | 'year';
   targetDate?: string; // YYYY-MM-DD
   startDate?: string; // YYYY-MM-DD
   endDate?: string; // YYYY-MM-DD
@@ -317,6 +318,36 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
     };
   }
 
+  const monthOnlyMatch = lower.match(/\b(?:bulan\s+)?(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+(\d{4}))?\b/i);
+  if (monthOnlyMatch) {
+    const monthName = monthOnlyMatch[1].toLowerCase();
+    const monthIndex = MONTH_NAMES[monthName];
+    const year = monthOnlyMatch[2] ? parseInt(monthOnlyMatch[2], 10) : now.getFullYear();
+    if (monthIndex !== undefined) {
+      const start = new Date(year, monthIndex, 1, 0, 0, 0);
+      const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+      return {
+        period: 'month',
+        startDate: toDateStr(start),
+        endDate: toDateStr(end),
+        displayDate: `${start.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`
+      };
+    }
+  }
+
+  const yearOnlyMatch = lower.match(/\b(?:tahun|thn|year)\s*(\d{4})\b/i);
+  if (yearOnlyMatch) {
+    const year = parseInt(yearOnlyMatch[1], 10);
+    const start = new Date(year, 0, 1, 0, 0, 0);
+    const end = new Date(year, 11, 31, 23, 59, 59, 999);
+    return {
+      period: 'year',
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `${year}`
+    };
+  }
+
   // 8. "bulan ini" / "bulan lalu"
   if (/\bbulan\s+lalu\b/i.test(lower)) {
     const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0);
@@ -423,7 +454,7 @@ export function parseMessage(
     };
   }
 
-  if (/^(?:download\s+spreadsheet|unduh\s+spreadsheet|download\s+excel|unduh\s+excel|export\s+spreadsheet|ekspor\s+spreadsheet|download\s+data|unduh\s+data)$/i.test(lower)) {
+  if (/(?:download|unduh|export|ekspor)\s+(?:spreadsheet|excel|data)(?:\s+(?:spreadsheet|excel|data))?/i.test(lower)) {
     return {
       intent: 'DOWNLOAD_SPREADSHEET',
       rawMessage: trimmed
@@ -447,7 +478,8 @@ export function parseMessage(
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(cleanPrefix) ||
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
-      /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower)
+      /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
+      /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih)\b/i.test(lower)
     );
 
   if (isQueryOrReport) {
@@ -455,11 +487,28 @@ export function parseMessage(
 
     const hasIncomeWord =
       /\b(?:pemasukan|income|uang\s+masuk)\b/i.test(lower) ||
-      (/\bmasuk\b/i.test(lower) && !/\b(?:pengeluaran|biaya|keluar)\b/i.test(lower));
+      (/\bmasuk\b/i.test(lower) && !/\b(?:pengeluaran|biaya|keluar|penyusutan)\b/i.test(lower));
 
     const hasExpenseWord =
-      /\b(?:pengeluaran|biaya|expense)\b/i.test(lower) ||
+      /\b(?:pengeluaran|biaya|expense|penyusutan|belanja|potongan)\b/i.test(lower) ||
       (/\bkeluar\b/i.test(lower) && !/\b(?:pemasukan|income|masuk)\b/i.test(lower));
+
+    const hasProfitWord = /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih|bersih)\b/i.test(lower);
+    const categoryMatch = lower.match(/\b(?:kategori|kat)\s+([a-z0-9\s\-_]+?)(?:\s+(?:pada|di|untuk|dari|hari|minggu|bulan|tahun|ini|lalu)|$)/i);
+    const categoryHint = categoryMatch ? detectCategory(categoryMatch[1], undefined, customCategoryMap) : undefined;
+
+    if (hasProfitWord) {
+      return {
+        intent: 'SUMMARY_PROFIT',
+        period: dateInfo.period,
+        targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
+        displayDate: dateInfo.displayDate,
+        category: categoryHint,
+        rawMessage: trimmed
+      };
+    }
 
     // 3a. Gabungan Pemasukan & Pengeluaran ("list pemasukan dan pengeluaran", "semua transaksi", dsb)
     if (hasIncomeWord && hasExpenseWord) {
@@ -510,6 +559,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
+        category: categoryHint,
         rawMessage: trimmed
       };
     }
@@ -531,6 +581,17 @@ export function parseMessage(
       return {
         intent: 'SUMMARY_MONTH',
         period: 'month',
+        targetDate: dateInfo.targetDate,
+        startDate: dateInfo.startDate,
+        endDate: dateInfo.endDate,
+        displayDate: dateInfo.displayDate,
+        rawMessage: trimmed
+      };
+    }
+    if (dateInfo.period === 'year') {
+      return {
+        intent: 'SUMMARY_MONTH',
+        period: 'year',
         targetDate: dateInfo.targetDate,
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,

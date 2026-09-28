@@ -13,6 +13,21 @@ function buildCsv(rows: Array<Array<string | number | boolean | null | undefined
   return rows.map((row) => row.map(csvEscape).join(',')).join('\n');
 }
 
+function formatDateForExport(iso?: string): string {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Asia/Jakarta'
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const userId = req.nextUrl.searchParams.get('userId');
 
@@ -28,45 +43,63 @@ export async function GET(req: NextRequest) {
     getRecurringExpenses(userId)
   ]);
 
+  const totalIncome = transactions
+    .filter((tx) => tx.type === 'income')
+    .reduce((sum, tx) => sum + tx.amount, 0);
+
+  const totalExpense = transactions
+    .filter((tx) => tx.type === 'expense')
+    .reduce((sum, tx) => sum + tx.amount, 0);
+
+  const netProfit = totalIncome - totalExpense;
+
+  const summaryRows = [
+    ['template', 'finance_export'],
+    ['owner_user_id', userId],
+    ['total_pemasukan', totalIncome],
+    ['total_pengeluaran', totalExpense],
+    ['laba_bersih', netProfit],
+    ['jumlah_transaksi', transactions.length],
+    ['jumlah_langganan_aktif', recurring.filter((item) => item.active).length],
+    ['tanggal_export', new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Jakarta' })]
+  ];
+
   const transactionRows = [
-    ['sheet', 'user_id', 'id', 'type', 'amount', 'category', 'note', 'source', 'created_at'],
+    ['tanggal', 'jenis', 'kategori', 'jumlah', 'keterangan', 'sumber'],
     ...transactions.map((tx) => [
-      'transactions',
-      tx.user_id || userId,
-      tx.id,
-      tx.type,
-      tx.amount,
+      formatDateForExport(tx.created_at),
+      tx.type === 'income' ? 'Pemasukan' : 'Pengeluaran',
       tx.category,
+      tx.amount,
       tx.note,
-      tx.source,
-      tx.created_at
+      tx.source
     ])
   ];
 
   const recurringRows = [
-    ['sheet', 'user_id', 'id', 'name', 'amount', 'category', 'due_date', 'active', 'created_at'],
+    ['nama_langganan', 'kategori', 'nominal', 'tanggal_jatuh_tempo', 'status', 'terakhir_berjalan'],
     ...recurring.map((item) => [
-      'recurring_expenses',
-      item.user_id || userId,
-      item.id,
       item.name,
-      item.amount,
       item.category,
+      item.amount,
       item.due_date,
-      item.active,
-      item.created_at
+      item.active ? 'Aktif' : 'Nonaktif',
+      item.last_run_date || '-'
     ])
   ];
 
   const csv = [
-    'transactions',
+    '[summary]',
+    buildCsv(summaryRows),
+    '',
+    '[transactions]',
     buildCsv(transactionRows),
     '',
-    'recurring_expenses',
+    '[recurring_expenses]',
     buildCsv(recurringRows)
   ].join('\n');
 
-  const fileName = `expense-bot-user-${encodeURIComponent(userId)}.csv`;
+  const fileName = `laporan-keuangan-user-${encodeURIComponent(userId)}.csv`;
 
   return new NextResponse(csv, {
     status: 200,
@@ -75,7 +108,8 @@ export async function GET(req: NextRequest) {
       'Content-Disposition': `attachment; filename="${fileName}"`,
       'Cache-Control': 'no-store, no-cache, must-revalidate',
       'X-Data-Owner': userId,
-      'X-Privacy-Mode': 'user-scoped-only'
+      'X-Privacy-Mode': 'user-scoped-only',
+      'X-Export-Template': 'finance-template-v1'
     }
   });
 }

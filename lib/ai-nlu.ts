@@ -33,10 +33,11 @@ Aturan utama:
 1. Jika pesan berhubungan dengan keuangan atau catatan transaksi, inferensikan maksudnya secara luas dan akurat.
 2. Jika pesan tidak berhubungan sama sekali dengan transaksi keuangan, catatan keuangan, tagihan, pemasukan, pengeluaran, atau laporan finansial, kembalikan "other".
 3. Jangan memaksa mengubah pesan yang jelas-jelas adalah query, laporan, ringkasan, atau list menjadi transaksi baru.
-4. Gunakan konteks tanggal seperti hari ini, kemarin, minggu ini, bulan ini, tanggal tertentu, rentang tanggal, atau tahun sebagai parameter waktu bila relevan.
+4. Gunakan konteks tanggal seperti hari ini, kemarin, minggu ini, bulan ini, nama bulan (mis. Agustus 2025), tanggal tertentu, rentang tanggal, atau tahun (mis. 2025/2026) sebagai parameter waktu bila relevan. Bulan/tahun spesifik berarti seluruh rentang kalender tersebut.
 5. Jika ada angka, nominal, tanggal, nama merchant, atau kata kunci keuangan, pertimbangkan sebagai bukti kuat bahwa ini adalah konteks finansial.
 6. Jangan terlalu membatasi diri pada contoh; pahami variasi bahasa Indonesia casual, singkat, atau tidak formal.
-7. Kembalikan JSON saja tanpa penjelasan, tanpa markdown, tanpa backtick.
+7. Untuk kategori pengeluaran, ambil kategori eksplisit dari format #kategori atau "kategori ..." bila ada; selain itu pilih kategori paling sesuai dengan catatan. Jangan mengarang kategori yang tidak didukung.
+8. Kembalikan JSON saja tanpa penjelasan, tanpa markdown, tanpa backtick.
 
 Klasifikasi yang mungkin:
 - "list_all": permintaan gabungan pemasukan dan pengeluaran sekaligus
@@ -46,7 +47,7 @@ Klasifikasi yang mungkin:
 - "add_recurring": tambah langganan atau tagihan rutin baru
 - "delete_recurring": hapus, stop, atau nonaktifkan langganan / tagihan rutin
 - "help_recurring": tanya cara atau bantuan terkait langganan
-- "summary": rekap, laporan, ringkasan, saldo, atau total transaksi per periode
+- "summary": rekap, laporan, ringkasan, saldo, laba/keuntungan, atau total transaksi per tanggal, bulan, atau tahun
 - "expense": mencatat pengeluaran baru
 - "income": mencatat pemasukan baru
 - "advice": minta saran atau insight keuangan
@@ -57,7 +58,9 @@ Klasifikasi yang mungkin:
 PENTING:
 - "list", "daftar", "rincian", "rekap", "laporan", "ringkasan", "cek saldo", "berapa", dan variasi sejenis TIDAK boleh dipahami sebagai "expense" atau "income" bila tujuannya adalah query/reporting.
 - Jika user hanya bertanya umum di luar keuangan, jangan dibuat keuangan; langsung pilih "other".
-- Nilai tanggal dan rentang tanggal serta periode hari/minggu/bulan bila ada.
+- Nilai tanggal dan rentang tanggal serta periode hari/minggu/bulan/tahun bila ada.
+- Untuk rekap laba, hitungannya adalah total pemasukan dikurangi total pengeluaran pada periode yang diminta.
+- "rekap bulan agustus 2025" dan "rekap tahun 2025" adalah query rekap, bukan transaksi baru.
 
 Pesan pengguna: "${trimmed}"
 Tanggal hari ini: ${todayStr}
@@ -70,7 +73,7 @@ Format output JSON valid:
   "amount": number,
   "note": "keterangan singkat transaksi atau nama langganan",
   "category": "kategori yang paling sesuai",
-  "period": "day" | "week" | "month",
+  "period": "day" | "week" | "month" | "year",
   "target_date": "YYYY-MM-DD",
   "display_date": "string tanggal yang mudah dibaca",
   "due_date": number
@@ -78,6 +81,10 @@ Format output JSON valid:
 
 Contoh yang valid:
 - "list pengeluaran hari ini" => {"type":"list_expenses","period":"day","target_date":"2026-09-28","display_date":"Hari Ini"}
+- "rekap laba tanggal 27 september 2026" => {"type":"summary","period":"day","target_date":"2026-09-27","display_date":"27 September 2026"}
+- "rekap pemasukan dan pengeluaran bulan agustus 2025" => {"type":"summary","period":"month","display_date":"Agustus 2025"}
+- "rekap tahun 2025" => {"type":"summary","period":"year","display_date":"2025"}
+- "beli makan 25rb #Food" => {"type":"expense","amount":25000,"note":"makan","category":"Food"}
 - "gaji 5jt" => {"type":"income","amount":5000000,"note":"gaji","category":"Income"}
 - "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}
 - "halo apa kabar" => {"type":"other"}

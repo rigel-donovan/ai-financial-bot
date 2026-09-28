@@ -35,6 +35,7 @@ export type IntentType =
   | 'SUMMARY_DAY'
   | 'SUMMARY_WEEK'
   | 'SUMMARY_MONTH'
+  | 'SUMMARY_PROFIT'
   | 'LIST_EXPENSES'
   | 'LIST_INCOMES'
   | 'LIST_ALL'
@@ -58,7 +59,7 @@ export interface ParsedIntent {
   rawMessage: string;
   dueDate?: number; // for recurring
   name?: string; // for recurring
-  period?: 'day' | 'week' | 'month';
+  period?: 'day' | 'week' | 'month' | 'year';
   targetDate?: string; // YYYY-MM-DD for single-day queries
   startDate?: string; // YYYY-MM-DD for ranges
   endDate?: string; // YYYY-MM-DD for ranges
