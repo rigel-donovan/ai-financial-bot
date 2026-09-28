@@ -39,7 +39,7 @@ Aturan utama:
 3. Pilih "other" hanya jika pesannya benar-benar tidak terkait keuangan atau fitur bot.
 4. Jangan mengubah pertanyaan, permintaan daftar, rekap, saldo, analisis, atau koreksi menjadi transaksi baru.
 5. Kenali tanggal tertentu, rentang tanggal, nama bulan, dan tahun. Bulan/tahun spesifik berarti seluruh rentang kalender tersebut.
-6. Jika satu pesan meminta ringkasan pemasukan dan pengeluaran sekaligus, pilih "list_all". Jika meminta selisih atau laba bersih, pilih "summary_profit".
+6. Jika satu pesan meminta ringkasan pemasukan dan pengeluaran sekaligus, pilih "list_all". Jika meminta selisih atau hasil pemasukan dikurangi pengeluaran, pilih "summary_profit". Frasa seperti "pemasukan kurang pengeluaran", "pendapatan minus biaya", "selisih masuk dan keluar", atau "uang masuk dikurangi uang keluar" semuanya berarti summary_profit.
 7. Jika pengguna ingin membetulkan transaksi lama, pilih "edit". Ambil target transaksi dari catatan/kategori/nominal/tanggal yang disebut; jika tertulis "terakhir", "yang tadi", atau tanpa target, gunakan target_query kosong agar transaksi terbaru pengguna yang diedit.
 8. Pada intent "edit", isi hanya field yang memang diminta berubah: amount untuk nominal, note untuk catatan, category untuk kategori. Field kosong berarti jangan ubah field tersebut. Jangan pernah mengubah permintaan edit menjadi transaksi baru.
 9. Untuk kategori, prioritaskan kategori yang disebut pengguna, termasuk hashtag, lalu gunakan kategori terdekat dari daftar yang tersedia.
@@ -97,6 +97,9 @@ Contoh yang valid:
 - "rekap laba tanggal 27 september 2026" => {"type":"summary","period":"day","target_date":"2026-09-27","display_date":"27 September 2026"}
 - "rekap pemasukan dan pengeluaran bulan agustus 2025" => {"type":"summary","period":"month","display_date":"Agustus 2025"}
 - "rekap tahun 2025" => {"type":"summary","period":"year","display_date":"2025"}
+- "pemasukan kurang pengeluaran bulan ini" => {"type":"summary_profit","period":"month","display_date":"Bulan Ini"}
+- "berapa selisih pendapatan dan biaya september 2025" => {"type":"summary_profit","period":"month","display_date":"September 2025"}
+- "total uang masuk dan uang keluar minggu ini" => {"type":"list_all","period":"week","display_date":"Minggu Ini"}
 - "beli makan 25rb #Food" => {"type":"expense","amount":25000,"note":"makan","category":"Food"}
 - "gaji 5jt" => {"type":"income","amount":5000000,"note":"gaji","category":"Income"}
 - "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}

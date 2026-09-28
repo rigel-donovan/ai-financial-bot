@@ -473,27 +473,35 @@ export function parseMessage(
 
   // 3. Query / List / Rekap / Ringkasan / Laporan (Batas luas & mengenali tanggal/periode)
   const isRecurringWord = /\b(?:rutin|langganan|subscription|subs)(?:ku)?\b/i.test(lower);
+  const hasIncomeExpression = /\b(?:pemasukan|income|uang\s+masuk|pendapatan|gaji)\b/i.test(lower);
+  const hasExpenseExpression = /\b(?:pengeluaran|biaya|expense|uang\s+keluar|belanja|penyusutan|potongan)\b/i.test(lower);
+  const isNetCalculationRequest =
+    (hasIncomeExpression && hasExpenseExpression && /\b(?:kurang|dikurangi|minus|selisih|net(?:to)?|bersih|beda)\b|(?<!\d)-(?!\d)/i.test(lower)) ||
+    /\b(?:berapa|hitung|total|jumlah|akumulasi)\b.{0,40}\b(?:pemasukan|income|pendapatan).{0,40}\b(?:pengeluaran|biaya|expense)\b/i.test(lower);
+  const hasFinancialPeriod = /\b(?:hari(?:\s+ini)?|kemarin|minggu(?:\s+ini|\s+lalu)?|bulan(?:\s+ini|\s+lalu)?|tahun|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|today|week|month|year)\b/i.test(lower);
   const isQueryOrReport =
     !isRecurringWord && (
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(cleanPrefix) ||
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
       /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
-      /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih)\b/i.test(lower)
+      /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih)\b/i.test(lower) ||
+      isNetCalculationRequest ||
+      ((hasIncomeExpression || hasExpenseExpression) && hasFinancialPeriod && /\b(?:total|jumlah|berapa|akumulasi|rekap|laporan|ringkasan|catatan|riwayat|tampilkan|lihat|cek)\b/i.test(lower))
     );
 
   if (isQueryOrReport) {
     const dateInfo = parseQueryDate(trimmed);
 
     const hasIncomeWord =
-      /\b(?:pemasukan|income|uang\s+masuk)\b/i.test(lower) ||
+      hasIncomeExpression ||
       (/\bmasuk\b/i.test(lower) && !/\b(?:pengeluaran|biaya|keluar|penyusutan)\b/i.test(lower));
 
     const hasExpenseWord =
-      /\b(?:pengeluaran|biaya|expense|penyusutan|belanja|potongan)\b/i.test(lower) ||
+      hasExpenseExpression ||
       (/\bkeluar\b/i.test(lower) && !/\b(?:pemasukan|income|masuk)\b/i.test(lower));
 
-    const hasProfitWord = /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih|bersih)\b/i.test(lower);
+    const hasProfitWord = isNetCalculationRequest || /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih|bersih)\b/i.test(lower);
     const categoryMatch = lower.match(/\b(?:kategori|kat)\s+([a-z0-9\s\-_]+?)(?:\s+(?:pada|di|untuk|dari|hari|minggu|bulan|tahun|ini|lalu)|$)/i);
     const categoryHint = categoryMatch ? detectCategory(categoryMatch[1], undefined, customCategoryMap) : undefined;
 
