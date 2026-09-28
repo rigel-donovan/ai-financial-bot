@@ -40,8 +40,10 @@ Aturan utama:
 4. Jangan mengubah pertanyaan, permintaan daftar, rekap, saldo, analisis, atau koreksi menjadi transaksi baru.
 5. Kenali tanggal tertentu, rentang tanggal, nama bulan, dan tahun. Bulan/tahun spesifik berarti seluruh rentang kalender tersebut.
 6. Jika satu pesan meminta ringkasan pemasukan dan pengeluaran sekaligus, pilih "list_all". Jika meminta selisih atau laba bersih, pilih "summary_profit".
-7. Untuk kategori, prioritaskan kategori yang disebut pengguna, termasuk hashtag, lalu gunakan kategori terdekat dari daftar yang tersedia.
-8. Kembalikan JSON saja tanpa penjelasan, tanpa markdown, tanpa backtick.
+7. Jika pengguna ingin membetulkan transaksi lama, pilih "edit". Ambil target transaksi dari catatan/kategori/nominal/tanggal yang disebut; jika tertulis "terakhir", "yang tadi", atau tanpa target, gunakan target_query kosong agar transaksi terbaru pengguna yang diedit.
+8. Pada intent "edit", isi hanya field yang memang diminta berubah: amount untuk nominal, note untuk catatan, category untuk kategori. Field kosong berarti jangan ubah field tersebut. Jangan pernah mengubah permintaan edit menjadi transaksi baru.
+9. Untuk kategori, prioritaskan kategori yang disebut pengguna, termasuk hashtag, lalu gunakan kategori terdekat dari daftar yang tersedia.
+10. Kembalikan JSON saja tanpa penjelasan, tanpa markdown, tanpa backtick.
 
 Klasifikasi yang mungkin:
 - "list_all": permintaan gabungan pemasukan dan pengeluaran sekaligus
@@ -58,6 +60,7 @@ Klasifikasi yang mungkin:
 - "advice": minta saran atau insight keuangan
 - "menu": minta bantuan fitur atau daftar menu
 - "delete": hapus atau batalkan transaksi
+- "edit": koreksi transaksi yang sudah tercatat, termasuk nominal, kategori, catatan, atau beberapa field sekaligus
 - "other": di luar konteks transaksi catatan keuangan
 
 PENTING:
@@ -80,6 +83,7 @@ Format output JSON valid:
   "amount": number,
   "note": "keterangan singkat transaksi atau nama langganan",
   "category": "kategori yang paling sesuai",
+  "target_query": "kata unik untuk mencari transaksi lama, kosong jika targetnya transaksi terakhir",
   "period": "day" | "week" | "month" | "year",
   "target_date": "YYYY-MM-DD",
   "start_date": "YYYY-MM-DD",
@@ -96,6 +100,8 @@ Contoh yang valid:
 - "beli makan 25rb #Food" => {"type":"expense","amount":25000,"note":"makan","category":"Food"}
 - "gaji 5jt" => {"type":"income","amount":5000000,"note":"gaji","category":"Income"}
 - "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}
+- "kategori bensin kemarin harusnya Bills, catatannya bayar parkir" => {"type":"edit","target_query":"bensin","category":"Bills","note":"bayar parkir"}
+- "transaksi terakhir harusnya 30 ribu dan kategorinya Transport" => {"type":"edit","amount":30000,"category":"Transport"}
 - "halo apa kabar" => {"type":"other"}
 `;
 
@@ -171,6 +177,26 @@ Contoh yang valid:
           endDate,
           displayDate,
           category: parsed.category ? detectCategory(parsed.category, parsed.category, customCategoryMap) : undefined,
+          rawMessage: trimmed
+        };
+      }
+
+      if (parsed.type === 'edit') {
+        const amount = Number(parsed.amount) || undefined;
+        const note = typeof parsed.note === 'string' ? parsed.note.trim() || undefined : undefined;
+        const category = typeof parsed.category === 'string'
+          ? detectCategory(parsed.category, parsed.category, customCategoryMap)
+          : undefined;
+        return {
+          intent: 'EDIT_LAST',
+          amount,
+          note,
+          category,
+          name: typeof parsed.target_query === 'string' ? parsed.target_query.trim() || undefined : undefined,
+          targetDate,
+          startDate,
+          endDate,
+          displayDate,
           rawMessage: trimmed
         };
       }

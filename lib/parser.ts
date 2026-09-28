@@ -666,13 +666,36 @@ export function parseMessage(
       const amtMatch = replacementPart.match(AMOUNT_REGEX);
       const amount = amtMatch ? parseAmount(amtMatch[0]) || undefined : undefined;
 
+      const categoryRequested = /\b(?:kategori|category)\b/i.test(targetPart) || /^\s*(?:kategori|category)\b/i.test(replacementPart);
+      const explicitCategory = replacementPart.match(/\b(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?([\p{L}\d_-]+)/iu);
+      const noteClause = replacementPart.match(/\b(?:catatan|keterangan|note)\s*(?:menjadi|jadi|ke|adalah)?\s*(.+)$/i);
+      const replacementIsCategoryOnly = /^\s*(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?[\p{L}\d_-]+\s*$/iu.test(replacementPart);
+      const categoryText = replacementPart.split(/\s+(?:dan\s+)?(?:catatan|keterangan|note)\b/i)[0];
+      const newCategory = explicitCategory?.[1] || (categoryRequested && !amtMatch ? categoryText.replace(/^\s*(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*/i, '').replace(/^#/, '').trim() : undefined);
+
       let newNote = replacementPart;
       if (amtMatch) {
         newNote = replacementPart.replace(amtMatch[0], '').replace(/\s+/g, ' ').trim();
       }
+      if (noteClause) {
+        newNote = noteClause[1]
+          .replace(/^\s*(?:menjadi|jadi|ke|adalah)\s+/i, '')
+          .replace(/\s+(?:dan\s+)?(?:kategori|category)\b.*$/i, '')
+          .replace(AMOUNT_REGEX, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      const remainderWithoutCategory = newNote
+        .replace(/\b(?:kategori|category)\s*(?:menjadi|jadi|ke|adalah)?\s*#?[\p{L}\d_-]+/iu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (replacementIsCategoryOnly || (categoryRequested && newCategory && !amtMatch && !explicitCategory) || (newCategory && !noteClause && !remainderWithoutCategory)) {
+        newNote = '';
+      }
 
       let targetQuery = targetPart
-        .replace(/\b(?:terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
+        .replace(AMOUNT_REGEX, '')
+        .replace(/\b(?:kategori|category|pengeluaran|terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
         .trim();
 
       const dateInfo = extractDateContextFromText(targetPart) || dateContext;
@@ -680,6 +703,7 @@ export function parseMessage(
         intent: 'EDIT_LAST',
         amount,
         note: newNote || undefined,
+        category: newCategory,
         name: targetQuery || undefined,
         targetDate: dateInfo?.targetDate,
         startDate: dateInfo?.startDate,

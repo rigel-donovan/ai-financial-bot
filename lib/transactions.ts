@@ -218,6 +218,7 @@ const responseTemplates = {
       '',
       '*Scan Struk:*',
       'Kirim foto struk belanja langsung ke bot ini untuk diproses lebih lanjut.',
+      'Untuk tanggal tertentu, tulis tanggal di caption foto, misalnya `26 September` atau `23 Agustus 2025`.',
       '',
       'Ketik `menu` untuk melihat semua opsi cepat.'
     ];
@@ -237,7 +238,7 @@ export async function handleUserMessage(
   let parsed: ParsedIntent = parseMessage(rawText, categoryMap);
 
   // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali
-  if (parsed.intent === 'UNKNOWN' && process.env.GEMINI_API_KEY) {
+  if ((parsed.intent === 'UNKNOWN' || parsed.intent === 'EDIT_LAST') && process.env.GEMINI_API_KEY) {
     try {
       const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap);
       if (aiParsed && aiParsed.intent !== 'UNKNOWN') {
@@ -809,16 +810,16 @@ async function handleEditLast(parsed: ParsedIntent, userId?: string): Promise<Ex
   const newNote = parsed.note;
   const targetQuery = parsed.name;
 
-  if ((!newAmount || newAmount <= 0) && !newNote) {
+  if ((!newAmount || newAmount <= 0) && !newNote && !parsed.category) {
     return {
       success: false,
-      replyText: '⚠️ Berikan nominal atau keterangan baru. Contoh: `edit jadi 35k` atau `edit bensin jadi 40k`'
+      replyText: 'Sebutkan perubahan yang diinginkan. Contoh: ubah kategori bensin jadi Transport, ganti catatan transaksi terakhir menjadi bensin pertalite, atau ubah kopi jadi 35rb kategori Food.'
     };
   }
 
   const categoryMap = await getCategoryMappings();
   const detected = newNote ? detectCategory(newNote, undefined, categoryMap) : undefined;
-  const newCategory = detected && detected !== 'Lainnya' ? detected : undefined;
+  const newCategory = parsed.category || (detected && detected !== 'Lainnya' ? detected : undefined);
 
   const result = await editTransaction({
     criteria: targetQuery ? { query: targetQuery, userId, targetDate: parsed.targetDate } : { userId, targetDate: parsed.targetDate },

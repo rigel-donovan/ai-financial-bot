@@ -141,23 +141,20 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
     // Save to Google Sheets
     await appendTransaction(transaction);
 
-    const nowFormatted = new Date().toLocaleDateString('id-ID', {
+    const transactionDateLabel = new Date(transaction.created_at).toLocaleDateString('id-ID', {
       day: 'numeric',
-      month: 'short',
+      month: 'long',
       year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
       timeZone: 'Asia/Jakarta'
     });
-
     const replyText = 
       `🧾 *Struk Berhasil Dianalisis AI!*\n\n` +
       `🏪 *Toko:* ${merchant}\n` +
       `💰 *Total:* ${formatRp(amount)}\n` +
       `🏷️ *Kategori:* ${category}\n` +
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
-      `📅 *Waktu:* ${nowFormatted}\n\n` +
-      `✅ _Otomatis dicatat ke Google Sheets Anda!_`;
+      `📅 *Tanggal transaksi:* ${transactionDateLabel}\n\n` +
+      `✅ _Otomatis dicatat ke Google Sheets Anda!_\n_Atur tanggal lewat caption foto, misalnya: 26 September atau 23 Agustus 2025._`;
 
     return {
       success: true,

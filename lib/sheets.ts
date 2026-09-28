@@ -598,9 +598,9 @@ export async function editTransaction(
     }
     if (opts.newNote) {
       mockStore.transactions[targetIdx].note = opts.newNote;
-      if (opts.newCategory) {
-        mockStore.transactions[targetIdx].category = opts.newCategory;
-      }
+    }
+    if (opts.newCategory) {
+      mockStore.transactions[targetIdx].category = opts.newCategory;
     }
     return { previous: prev, updated: mockStore.transactions[targetIdx] };
   }
