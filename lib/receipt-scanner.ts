@@ -22,10 +22,10 @@ function resolveReceiptDate(targetDate?: string): string {
   return new Date(`${targetDate}T12:00:00+07:00`).toISOString();
 }
 
-const RETRYABLE_GEMINI_STATUSES = new Set([429, 503]);
+const RETRYABLE_GEMINI_STATUSES = new Set([429, 503, 504]);
 const MAX_GEMINI_ATTEMPTS_PER_MODEL = 2;
-const GEMINI_REQUEST_TIMEOUT_MS = 12_000;
-const OCR_SPACE_REQUEST_TIMEOUT_MS = 15_000;
+const GEMINI_REQUEST_TIMEOUT_MS = 25_000;
+const OCR_SPACE_REQUEST_TIMEOUT_MS = 20_000;
 
 interface ReceiptExtraction {
   total_amount: number;
@@ -64,9 +64,12 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
-  const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)\b|\b(?:amount|balance)\s+due\b/i;
+  // Pola 1: Label total eksplisit (sangat luas)
+  const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)?\b|\b(?:amount|balance)\s+due\b|\bnett?\b|\bbayar\b|\bpembayaran\b|\btunai\b|\bcash\b|\bcredit\b|\bdebit\b|\bcharge\b|\bfinal\s*(?:amount|total|price)\b|\bdpp\b|\btotal\s*(?:harga|belanja|bayar|transaksi|amount|due|price|payment|bill|net|nett)?\b/i;
   let total = 0;
   let amountSource: 'total' | 'subtotal' = 'total';
+
+  // Cari dari bawah ke atas untuk menemukan total yang paling relevan
   for (let index = lines.length - 1; index >= 0; index--) {
     if (!totalLabel.test(lines[index])) continue;
     total = extractAmountFromOcrLine(lines[index]);
@@ -76,6 +79,7 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     if (total > 0) break;
   }
 
+  // Pola 2: Subtotal fallback
   if (total <= 0) {
     const subtotalLabel = /\bsub[\s-]?total\b/i;
     for (let index = lines.length - 1; index >= 0; index--) {
@@ -88,6 +92,24 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
         amountSource = 'subtotal';
         break;
       }
+    }
+  }
+
+  // Pola 3: Last-resort — cari angka terbesar di 40% bawah struk
+  // Struk biasanya punya total di bagian bawah dengan nominal terbesar
+  if (total <= 0) {
+    const bottomStart = Math.max(0, Math.floor(lines.length * 0.6));
+    const bottomLines = lines.slice(bottomStart);
+    let maxAmount = 0;
+    for (const line of bottomLines) {
+      const lineAmount = extractAmountFromOcrLine(line);
+      if (lineAmount > maxAmount) {
+        maxAmount = lineAmount;
+      }
+    }
+    if (maxAmount >= 1000) {
+      total = maxAmount;
+      amountSource = 'subtotal';
     }
   }
 
@@ -183,7 +205,8 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
 `.trim();
 
   const candidateModels = [
-    'gemini-3.8-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash-preview-05-20',
     'gemini-3.5-flash'
   ];
 
