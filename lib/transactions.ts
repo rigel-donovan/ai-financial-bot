@@ -958,6 +958,8 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
 
 Data yang akan diunduh hanya mencakup transaksi milik user ini saja, dan tidak akan menampilkan data user lain.
 
+File Excel berisi tab Dashboard, transactions, dan recurring_expenses.
+
 🔐 *Privasi aktif:* data user lain akan dibuang dari file export.
 
 👉 Klik tautan berikut untuk mengunduh:

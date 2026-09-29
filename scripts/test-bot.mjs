@@ -2,6 +2,8 @@ import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../li
 import { handleUserMessage } from '../lib/transactions';
 import { scanReceiptImage } from '../lib/receipt-scanner';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import ExcelJS from 'exceljs';
+import { buildSpreadsheet } from '../app/api/download-spreadsheet/route';
 
 const assertionFailures = [];
 const originalAssert = console.assert.bind(console);
@@ -214,6 +216,30 @@ async function runTests() {
     else process.env.GEMINI_API_KEY = previousGeminiKey;
   }
 
+  const exportedWorkbookBuffer = await buildSpreadsheet([
+    { id: 'tx-private-1', user_id: 'user_export_test', type: 'income', amount: 500000, category: 'Income', note: 'Gaji', raw_message: '', source: 'manual', created_at: '2026-09-01T12:00:00.000Z' },
+    { id: 'tx-private-2', user_id: 'user_export_test', type: 'expense', amount: 125000, category: 'Food', note: 'Makan', raw_message: '', source: 'manual', created_at: '2026-09-02T12:00:00.000Z' },
+    { id: 'tx-other-user', user_id: 'user_other_export_test', type: 'expense', amount: 900000, category: 'Transport', note: 'PRIVATE OTHER USER', raw_message: '', source: 'manual', created_at: '2026-09-02T12:00:00.000Z' }
+  ], [
+    { id: 'rec-private', user_id: 'user_export_test', name: 'Internet', amount: 80000, category: 'Bills', due_date: 10, active: true, last_run_date: '2026-09-10', created_at: '2026-08-01T12:00:00.000Z' },
+    { id: 'rec-other-user', user_id: 'user_other_export_test', name: 'Private Subscription', amount: 700000, category: 'Bills', due_date: 15, active: true, created_at: '2026-08-01T12:00:00.000Z' }
+  ], 'user_export_test');
+  const exportedWorkbook = new ExcelJS.Workbook();
+  await exportedWorkbook.xlsx.load(exportedWorkbookBuffer);
+  const exportedTransactions = exportedWorkbook.getWorksheet('transactions');
+  const exportedRecurring = exportedWorkbook.getWorksheet('recurring_expenses');
+  const exportedDashboard = exportedWorkbook.getWorksheet('Dashboard');
+  const exportedSheetValues = JSON.stringify([
+    exportedTransactions?.getSheetValues(),
+    exportedRecurring?.getSheetValues()
+  ]);
+  console.assert(exportedWorkbook.worksheets.length === 3, 'Spreadsheet must contain exactly three sheets.');
+  console.assert(Boolean(exportedTransactions && exportedRecurring && exportedDashboard), 'Spreadsheet sheet names are incorrect.');
+  console.assert(exportedTransactions?.rowCount === 3 && !exportedSheetValues.includes('PRIVATE OTHER USER'), 'Transaction export leaked another user or has unexpected rows.');
+  console.assert(exportedRecurring?.rowCount === 2 && !exportedSheetValues.includes('Private Subscription'), 'Recurring export leaked another user or has unexpected rows.');
+  console.assert(exportedDashboard?.getCell('A5').value === 500000 && exportedDashboard.getCell('C5').value === 125000, 'Dashboard transaction totals are incorrect.');
+  console.assert(exportedDashboard?.getCell('D21').value === 80000, 'Dashboard recurring monthly total is incorrect.');
+
   console.log('✓ parseMessage passed!');
 
   console.log('--- 4. Testing End-to-End Business Logic ---');
@@ -292,7 +318,7 @@ async function runTests() {
   console.log('Help response: OK');
 
   const downloadRes = await handleUserMessage('download spreadsheet', 'user_export');
-  console.assert(downloadRes.success && downloadRes.replyText.includes('/api/download-spreadsheet?userId=user_export') && downloadRes.replyText.includes('hanya mencakup transaksi milik user ini saja'), 'download spreadsheet response should include a user-scoped download link: ' + downloadRes.replyText);
+  console.assert(downloadRes.success && downloadRes.replyText.includes('/api/download-spreadsheet?userId=user_export') && downloadRes.replyText.includes('hanya mencakup transaksi milik user ini saja') && downloadRes.replyText.includes('recurring_expenses'), 'download spreadsheet response should include a private multi-sheet download link: ' + downloadRes.replyText);
   console.log('Download spreadsheet response: OK');
 
   const historicalDeleteOutput = await handleUserMessage('27 september 2026 makan siang 45rb', 'user_output_delete');
