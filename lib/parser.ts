@@ -432,6 +432,16 @@ export function extractDateContextFromText(text: string): { targetDate?: string;
   } : null;
 }
 
+function cleanTransactionNote(note: string): string {
+  const datePhrase = /\b(?:(?:buat|untuk|pada|tanggal|tgl|di)\s+)*(?:kemarin(?:\s+lusa)?|hari\s+ini|today|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/gi;
+  return note
+    .replace(datePhrase, ' ')
+    .replace(/\b(?:sebesar|buat|untuk|pada|tanggal|tgl|di)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:-]+|[\s,;:-]+$/g, '')
+    .trim();
+}
+
 export function parseMessage(
   rawText: string,
   customCategoryMap?: Record<string, string[]>
@@ -923,7 +933,7 @@ export function parseMessage(
     if (amount) {
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = rest.replace(/#\w+/, '').trim() || 'Pemasukan';
+      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim()) || 'Pemasukan';
       const category = detectCategory(cleanNote, hashtagCategory || 'Income', customCategoryMap);
 
       return {
@@ -931,6 +941,8 @@ export function parseMessage(
         amount,
         note: cleanNote,
         category,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -949,7 +961,7 @@ export function parseMessage(
     if (amount) {
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = rest.replace(/#\w+/, '').trim() || 'Pengeluaran';
+      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim()) || 'Pengeluaran';
       const category = detectCategory(cleanNote, hashtagCategory, customCategoryMap);
 
       return {
@@ -957,6 +969,8 @@ export function parseMessage(
         amount,
         note: cleanNote,
         category,
+        targetDate: dateContext?.targetDate,
+        displayDate: dateContext?.displayDate,
         rawMessage: trimmed
       };
     }
@@ -982,7 +996,7 @@ export function parseMessage(
     if (amount && isReasonableAmount && !isDatePattern && rest && isNaN(Number(rest))) {
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = rest.replace(/#\w+/, '').trim();
+      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim());
       const category = detectCategory(cleanNote, hashtagCategory, customCategoryMap);
 
       return {
@@ -1050,10 +1064,10 @@ export function parseMessage(
     });
 
     if (isIncome) {
-      let cleanNote = note
+      let cleanNote = cleanTransactionNote(note
         .replace(/^(?:masuk|pemasukan|income|in|m)\s+/i, '')
         .replace(/^(?:dapat|dapet|terima)\s+(?:uang\s+|transferan\s+)?/i, '')
-        .trim();
+        .trim());
       if (!cleanNote) cleanNote = 'Pemasukan';
       const category = detectCategory(cleanNote, hashtagCat || 'Income', customCategoryMap);
       return {
@@ -1068,11 +1082,11 @@ export function parseMessage(
     }
 
     // Expense
-    let cleanNote = note
+    let cleanNote = cleanTransactionNote(note
       .replace(/^(?:keluar|expense|out|k)\s+/i, '')
       .replace(/^(?:tadi\s+|kemarin\s+)?(?:abis\s+|habis\s+)?/i, '')
       .replace(/\b(?:abis|habis)\b/gi, '')
-      .trim();
+      .trim());
 
     if (!cleanNote) cleanNote = 'Pengeluaran';
     const category = detectCategory(cleanNote, hashtagCat, customCategoryMap);

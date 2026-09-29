@@ -154,6 +154,18 @@ async function runTests() {
   const p34 = parseQueryDate('struk tanggal 27 september 2026');
   console.assert(p34 && p34.targetDate === '2026-09-27', 'p34 failed: ' + JSON.stringify(p34));
 
+  const p35 = parseMessage('penjualan pulsa sebesar 150k buat 28 agustus 2026');
+  console.assert(p35.intent === 'RECORD_INCOME' && p35.amount === 150000 && p35.note === 'penjualan pulsa' && p35.targetDate === '2026-08-28', 'p35 failed: ' + JSON.stringify(p35));
+
+  const p36 = parseMessage('masuk 150k penjualan pulsa buat 28 agustus 2026');
+  console.assert(p36.intent === 'RECORD_INCOME' && p36.note === 'penjualan pulsa' && p36.targetDate === '2026-08-28', 'p36 failed: ' + JSON.stringify(p36));
+
+  const p37 = parseMessage('keluar 50rb bensin tanggal 28 agustus 2026');
+  console.assert(p37.intent === 'RECORD_EXPENSE' && p37.note === 'bensin' && p37.targetDate === '2026-08-28', 'p37 failed: ' + JSON.stringify(p37));
+
+  const p38 = parseMessage('50rb bensin buat 28 agustus 2026');
+  console.assert(p38.intent === 'RECORD_EXPENSE' && p38.note === 'bensin' && p38.targetDate === '2026-08-28', 'p38 failed: ' + JSON.stringify(p38));
+
   const previousOcrKey = process.env.OCR_SPACE_API_KEY;
   const previousGeminiKey = process.env.GEMINI_API_KEY;
   const previousFetch = globalThis.fetch;
@@ -212,6 +224,9 @@ async function runTests() {
   const res2 = await handleUserMessage('masuk 5000000 gaji');
   console.assert(res2.success && res2.replyText.includes('Rp5.000.000'), 'res2 failed');
   console.log('Recorded income: OK');
+
+  const dateAwareIncome = await handleUserMessage('penjualan pulsa sebesar 150k buat 28 agustus 2026', 'user_note_date');
+  console.assert(dateAwareIncome.success && dateAwareIncome.replyText.includes('Catatan:* penjualan pulsa') && dateAwareIncome.replyText.includes('Tanggal:* 28 Agustus 2026') && !dateAwareIncome.replyText.includes('Catatan:* penjualan pulsa sebesar buat'), 'Date-aware income note failed: ' + dateAwareIncome.replyText);
 
   const res3 = await handleUserMessage('ringkasan bulan');
   console.assert(res3.success && res3.replyText.includes('Rp25.000'), 'res3 failed');
