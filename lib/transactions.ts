@@ -160,7 +160,10 @@ const responseTemplates = {
       '*AI & Foto Struk:*',
       '• `saran` (AI Financial Advisor)',
       '• Kirim langsung *foto struk belanja* 📷',
-      '• `list langganan` / `tambah langganan`'
+      '• `list langganan` / `tambah langganan`',
+      '',
+      '*📥 Download Data:*',
+      '• `download sheets` / `export data` / `unduh spreadsheet`'
     ].join('\n');
 
     return buildSuccessTemplate('🤖 Expense Bot Menu', [body]);
@@ -219,6 +222,9 @@ const responseTemplates = {
       '*Scan Struk:*',
       'Kirim foto struk belanja langsung ke bot ini untuk diproses lebih lanjut.',
       'Untuk tanggal tertentu, tulis tanggal di caption foto, misalnya `26 September` atau `23 Agustus 2025`.',
+      '',
+      '*Download Spreadsheet:*',
+      '• `download sheets` / `export data` / `unduh spreadsheet`',
       '',
       'Ketik `menu` untuk melihat semua opsi cepat.'
     ];
@@ -889,7 +895,8 @@ function handleMenu(userId?: string): ExecutionResult {
       title: '🤖 Fitur Pintar',
       rows: [
         { id: 'saran', title: 'Saran AI Finansial', description: 'Dapatkan insight hemat dari Gemini AI' },
-        { id: 'list langganan', title: 'Langganan & Tagihan Rutin', description: 'Lihat tagihan & langganan aktif' }
+        { id: 'list langganan', title: 'Langganan & Tagihan Rutin', description: 'Lihat tagihan & langganan aktif' },
+        { id: 'download sheets', title: 'Download Spreadsheet', description: 'Unduh data transaksi ke CSV/Excel' }
       ]
     },
     {
@@ -1068,9 +1075,27 @@ function handleHelpRecurring(): ExecutionResult {
  * Handle unknown / help message
  */
 function handleHelp(rawText: string): ExecutionResult {
-  const lower = (rawText || '').toLowerCase();
+  const lower = (rawText || '').toLowerCase().trim();
+
+  // Recurring help
   if (/\b(?:rutin|langganan|subscription|subs)\b/i.test(lower)) {
     return handleHelpRecurring();
+  }
+
+  // Friendly response for greetings / thanks / acknowledgments
+  if (/^(?:makasih|makasi|terima\s*kasih|thanks?|thank\s*you|thx|tq|ok(?:e|ay|eh|ey)?|sip|siap|mantap|noted|baik|good|bagus|keren|aman|nuhun|iya|yoi|yoy|nice|great|got\s*it|understood|paham|mengerti|ngerti)$/i.test(lower)) {
+    return {
+      success: true,
+      replyText: '😊 Sama-sama! Ada yang lain yang bisa dibantu? Ketik `menu` untuk melihat semua fitur.'
+    };
+  }
+
+  // Friendly response for greetings
+  if (/^(?:halo|hi|hai|hello|helo|hey|hei|yo|p|woi|bos|boss|bang|kak|gan|sis|mas|mba|mbak|oi|bosku|gais|guys|assalamualaikum|selamat\s+(?:pagi|siang|sore|malam))$/i.test(lower)) {
+    return {
+      success: true,
+      replyText: '👋 Halo! Selamat datang di Bot Keuangan. Ketik `menu` untuk melihat daftar fitur, atau langsung catat transaksi seperti `beli kopi 25rb`.'
+    };
   }
 
   return { success: true, replyText: responseTemplates.help({ rawText }) };

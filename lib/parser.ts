@@ -446,22 +446,36 @@ export function parseMessage(
 
   const dateContext = extractDateContextFromText(trimmed);
 
-  // 1. Menu / Sapaan
-  if (/^(?:menu|halo|hi|hai|mulai|start|fitur)$/i.test(lower)) {
+  // 1. Menu / Sapaan / Greeting
+  if (/^(?:menu|halo|hi|hai|hello|helo|hey|hei|yo|p|mulai|start|fitur|woi|bos|boss|bang|kak|gan|sis|mas|mba|mbak|assalamualaikum|assalamu'?alaikum|selamat\s+(?:pagi|siang|sore|malam)|hola|oi|bosku|gais|guys)$/i.test(lower)) {
     return {
       intent: 'MENU',
       rawMessage: trimmed
     };
   }
 
-  if (/^(?:bantuan|help|panduan|cara pakai)$/i.test(lower)) {
+  // 1b. Ucapan terima kasih / acknowledgment → tampilkan menu
+  if (/^(?:makasih|makasi|terima\s*kasih|thanks?|thank\s*you|thx|tq|ok(?:e|ay|eh|ey)?|sip|siap|mantap|noted|baik|good|bagus|keren|aman|nuhun|hatur\s+nuhun|iya|yoi|yoy|betul|bener|oke\s+(?:deh|sip|makasih|thanks)|nice|great|got\s*it|understood|paham|mengerti|ngerti)$/i.test(lower)) {
+    return {
+      intent: 'MENU',
+      rawMessage: trimmed
+    };
+  }
+
+  if (
+    /^(?:bantuan|help|panduan|cara\s+pakai|cara\s+pake|cara\s+kerja|cara\s*nya|caranya|tutorial|guide|how|tolong\s+bantu|bantu(?:\s+dong)?|gimana\s+(?:caranya|sih|nih|cara(?:nya)?)|bisa\s+(?:apa\s+(?:aja|saja)|ngapain(?:\s+aja)?)|fitur\s+(?:apa\s+(?:aja|saja))|cara\s+penggunaan|apa\s+aja\s+(?:fitur|bisa)|bot\s+ini\s+(?:bisa\s+apa|apa|ngapain)|kamu\s+(?:bisa\s+apa|siapa)|perintah|commands?)$/i.test(lower)
+  ) {
     return {
       intent: 'HELP',
       rawMessage: trimmed
     };
   }
 
-  if (/(?:download|unduh|export|ekspor)\s+(?:spreadsheet|excel|data)(?:\s+(?:spreadsheet|excel|data))?/i.test(lower)) {
+  if (
+    /(?:download|unduh|export|ekspor|ambil|kirim|minta|buat(?:in|kan)?|save|simpan)\s+(?:spreadsheet|excel|data|file|csv|sheets?|rekap|laporan|catatan|transaksi)(?:\s+(?:spreadsheet|excel|data|file|csv|sheets?|ku|saya|gw|gue))?/i.test(lower) ||
+    /(?:spreadsheet|excel|sheets?)\s+(?:download|unduh|export|ekspor|ambil|kirim|minta)/i.test(lower) ||
+    /^(?:download|unduh|export|ekspor)\s*(?:spreadsheet|excel|data|file|csv|sheets?)?\s*$/i.test(lower.trim())
+  ) {
     return {
       intent: 'DOWNLOAD_SPREADSHEET',
       rawMessage: trimmed
@@ -470,7 +484,7 @@ export function parseMessage(
 
   // 2. AI Advisor / Saran / Analisa
   if (
-    /^(?:saran|analisa|analisis|insight|rekomendasi|evaluasi|gimana keuanganku|tips hemat|konsultasi|cek keuangan)(?:\s+.*)?$/i.test(lower)
+    /^(?:saran|analisa|analisis|insight|rekomendasi|evaluasi|gimana\s+keuangan(?:ku)?|tips\s+hemat|konsultasi|cek\s+keuangan|advice|financial\s+advice|gimana\s+(?:nih|dong)\s+keuangan|keuangan(?:ku)?\s+gimana|review\s+keuangan|audit|analisa\s+keuangan)(?:\s+.*)?$/i.test(lower)
   ) {
     return {
       intent: 'AI_ADVICE',
@@ -492,12 +506,18 @@ export function parseMessage(
   const hasFinancialPeriod = /\b(?:hari(?:\s+ini)?|kemarin|minggu(?:\s+ini|\s+lalu)?|bulan(?:\s+ini|\s+lalu)?|tahun|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|today|week|month|year)\b/i.test(lower);
   const isQueryOrReport =
     !isRecurringWord && (
-      /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(cleanPrefix) ||
-      /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|ringkasan|riwayat|history|summary)\b/i.test(lower) ||
+      /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|recap|ringkasan|riwayat|history|summary|report|stats|statistik|total|saldo|catatan|data|transaksi)\b/i.test(cleanPrefix) ||
+      /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|recap|ringkasan|riwayat|history|summary|report|stats|statistik|total|saldo)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
-      /^(?:pengeluaran|biaya|pemasukan)\s+(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
-      /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih)\b/i.test(lower) ||
+      /^(?:pengeluaran|biaya|pemasukan|expenses?|incomes?|pendapatan|belanja)\s*(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)?(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
+      /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih|margin|net(?:to)?)\b/i.test(lower) ||
       isNetCalculationRequest ||
+      /\b(?:uang(?:ku|\s+(?:saya|gw|gue|gua|aku))?|duit(?:ku)?|dana(?:ku)?)\s*(?:berapa|sisa|tersisa|masih|ada|tinggal)/i.test(lower) ||
+      /\b(?:sisa|masih\s+(?:ada|punya)|tinggal)\s*(?:berapa|uang|duit|dana)/i.test(lower) ||
+      /\b(?:berapa\s+(?:sisa(?:nya)?|uang|duit|total|semua)|total(?:nya)?\s+(?:berapa|hari|minggu|bulan))/i.test(lower) ||
+      /\b(?:catatan\s+(?:keuangan|transaksi)|data\s+(?:keuangan|transaksi)|ada\s+(?:transaksi|catatan)\s+apa)/i.test(lower) ||
+      /\b(?:cek(?:in)?|check)\s+(?:uang|duit|saldo|dana|keuangan|transaksi|pengeluaran|pemasukan)/i.test(lower) ||
+      /\b(?:habis|abis)\s+(?:berapa|banyak|total)/i.test(lower) ||
       ((hasIncomeExpression || hasExpenseExpression) && hasFinancialPeriod && /\b(?:total|jumlah|berapa|akumulasi|rekap|laporan|ringkasan|catatan|riwayat|tampilkan|lihat|cek)\b/i.test(lower))
     );
 
@@ -631,11 +651,13 @@ export function parseMessage(
   }
 
   // 4. Hapus Terakhir / Undo / Batal
-  // Mendukung: "hapus terakhir", "batalin transaksi tadi", "hapus isi bensin 30ribu dari struk tadi", "hapus catatan pengeluaran sebelumnya"
+  // Mendukung: "hapus terakhir", "batalin transaksi tadi", "ga jadi", "gausah", "cancel aja", dll.
   if (!isRecurringWord) {
     const isDeleteWord =
-      /^(?:hapus|batal|batalin|cancel|undo|delete|ralat|tolong\s+hapus)\b/i.test(trimmed) ||
-      /\b(?:hapus|batal|batalin|cancel|undo)\s+(?:transaksi|catatan|pengeluaran|pemasukan|struk|yang tadi|tadi|sebelumnya)\b/i.test(lower);
+      /^(?:hapus|batal|batalin|cancel|undo|delete|ralat|tolong\s+hapus|remove)\b/i.test(trimmed) ||
+      /\b(?:hapus|batal|batalin|cancel|undo)\s+(?:transaksi|catatan|pengeluaran|pemasukan|struk|yang tadi|tadi|sebelumnya|aja|saja|dong|deh)\b/i.test(lower) ||
+      /^(?:ga\s*jadi|gak?\s*jadi|nggak?\s*jadi|ngga\s*jadi|tidak\s*jadi|gajadi|gakjadi|gausah|ga\s*usah|gak?\s*usah|nggak?\s*usah|udah\s+(?:ga|gak|nggak|ngga)\s+jadi)(?:\s|$)/i.test(lower) ||
+      /\b(?:batalin|cancel|hapus|remove)\s+(?:aja|saja|dong|deh|ya)\b/i.test(lower);
 
     if (isDeleteWord) {
       const extractedAmount = extractTransactionAmount(trimmed);
@@ -655,7 +677,7 @@ export function parseMessage(
         .replace(/\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b/gi, '')
         .replace(/\s+/g, ' ')
         .trim();
-      if (cleanNote === 'undo' || cleanNote === 'cancel' || cleanNote === 'hapus' || cleanNote === 'batal') {
+      if (/^(?:undo|cancel|hapus|batal|ga\s*jadi|gak?\s*jadi|nggak?\s*jadi|gajadi|gakjadi|gausah|ga\s*usah|aja|saja|dong|deh|ya|batalin|remove)$/i.test(cleanNote)) {
         cleanNote = '';
       }
 
@@ -977,7 +999,10 @@ export function parseMessage(
 
   // 13. General Natural Language Parser (Bebas tanpa format kaku)
   // Guard: Jangan pernah memproses pesan hapus / batal sebagai pengeluaran!
-  if (/^(?:hapus|batal|batalin|cancel|undo|delete|ralat|tolong\s+hapus)\b/i.test(trimmed)) {
+  if (
+    /^(?:hapus|batal|batalin|cancel|undo|delete|ralat|tolong\s+hapus|remove)\b/i.test(trimmed) ||
+    /^(?:ga\s*jadi|gak?\s*jadi|nggak?\s*jadi|ngga\s*jadi|tidak\s*jadi|gajadi|gakjadi|gausah|ga\s*usah)(?:\s|$)/i.test(lower)
+  ) {
     return {
       intent: 'DELETE_LAST',
       rawMessage: trimmed
@@ -1011,8 +1036,12 @@ export function parseMessage(
 
     const INCOME_KEYWORDS = [
       'masuk', 'pemasukan', 'income', 'gaji', 'gajian', 'bonus', 'transferan',
-      'dapat', 'dapet', 'terima', 'thr', 'penjualan', 'laku',
-      'komisi', 'arisan', 'cashback', 'cair', 'upah', 'honor'
+      'dapat', 'dapet', 'terima', 'thr', 'penjualan', 'laku', 'revenue',
+      'komisi', 'arisan', 'cashback', 'cair', 'upah', 'honor', 'honorarium',
+      'bayaran', 'dibayar', 'fee', 'invoice', 'tagih', 'piutang', 'refund',
+      'pengembalian', 'dividen', 'hadiah', 'hibah', 'sedekah', 'donasi',
+      'untung', 'profit', 'hasil', 'orderan', 'freelance', 'proyek',
+      'klien', 'client', 'payout', 'withdraw', 'penarikan', 'pencairan'
     ];
 
     const isIncome = INCOME_KEYWORDS.some(kw => {
