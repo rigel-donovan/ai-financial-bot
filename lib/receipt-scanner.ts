@@ -54,7 +54,18 @@ function extractAmountFromOcrLine(line: string): number {
   const values = line.match(/(?:rp\.?\s*)?[\d][\d.,\s]*/gi) || [];
   const value = values.at(-1);
   if (!value) return 0;
-  const digits = value.replace(/\D/g, '');
+
+  const numeric = value.replace(/[^\d.,]/g, '');
+  if (!numeric) return 0;
+
+  const lastSeparator = Math.max(numeric.lastIndexOf('.'), numeric.lastIndexOf(','));
+  const decimalDigits = lastSeparator >= 0 ? numeric.length - lastSeparator - 1 : 0;
+  if (decimalDigits > 0 && decimalDigits <= 2) {
+    const integerPart = numeric.slice(0, lastSeparator).replace(/\D/g, '');
+    return integerPart ? Number(integerPart) : 0;
+  }
+
+  const digits = numeric.replace(/\D/g, '');
   return digits ? Number(digits) : 0;
 }
 
@@ -95,31 +106,13 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     }
   }
 
-  // Pola 3: Last-resort — cari angka terbesar di 40% bawah struk
-  // Struk biasanya punya total di bagian bawah dengan nominal terbesar
-  if (total <= 0) {
-    const bottomStart = Math.max(0, Math.floor(lines.length * 0.6));
-    const bottomLines = lines.slice(bottomStart);
-    let maxAmount = 0;
-    for (const line of bottomLines) {
-      const lineAmount = extractAmountFromOcrLine(line);
-      if (lineAmount > maxAmount) {
-        maxAmount = lineAmount;
-      }
-    }
-    if (maxAmount >= 1000) {
-      total = maxAmount;
-      amountSource = 'subtotal';
-    }
-  }
-
   if (total <= 0) {
     throw new Error('OCR.Space tidak menemukan baris total pembayaran pada struk.');
   }
 
   const merchant = lines.find((line) =>
-    !/^(?:struk|receipt|invoice|cash|tanggal|waktu|shift|no\.?\s*(?:trans|nota)|total)/i.test(line) &&
-    /[a-z]/i.test(line)
+    /[a-z]/i.test(line) &&
+    !/^(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|struk|receipt|invoice|faktur|cash|tanggal|waktu|shift|no\.?\s*(?:trans|nota)|total|jumlah|bayar|pembayaran|tagihan|biaya|idpel|nama|periode|no\s*reff|pax|table)\b/i.test(line)
   ) || 'Toko/Merchant';
   const category = getOcrCategory(`${merchant}\n${text}`);
 
@@ -215,8 +208,25 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
   let rawJsonText = '';
   let lastError: any = null;
   const modelErrors: Array<{ model: string; status?: number; message: string }> = [];
+  let extraction: ReceiptExtraction | undefined;
+  let scanProvider = 'Gemini';
+  let ocrFailure: unknown;
+  let ocrAttempted = false;
 
-  for (const modelName of genAI ? candidateModels : []) {
+  if (process.env.OCR_SPACE_API_KEY) {
+    ocrAttempted = true;
+    try {
+      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
+      scanProvider = 'OCR.Space';
+      console.info('[ReceiptScanner] Receipt extracted with OCR.Space.');
+    } catch (err) {
+      ocrFailure = err;
+      lastError = err;
+      console.warn('[ReceiptScanner] OCR.Space primary scan failed; trying Gemini:', err);
+    }
+  }
+
+  for (const modelName of !extraction && genAI ? candidateModels : []) {
     for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
       try {
         const model = genAI!.getGenerativeModel({ model: modelName });
@@ -261,20 +271,18 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
     if (rawJsonText) break;
   }
 
-  let extraction: ReceiptExtraction | undefined;
-  let scanProvider = 'Gemini';
-  let ocrFailure: unknown;
-
-  if (!rawJsonText) {
+  if (!rawJsonText && !extraction) {
     console.error('[ReceiptScanner] All vision models failed:', modelErrors);
-    try {
-      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
-      scanProvider = 'OCR.Space';
-      console.info('[ReceiptScanner] Receipt extracted with OCR.Space fallback.');
-    } catch (ocrError: any) {
-      console.error('[ReceiptScanner] OCR.Space fallback failed:', ocrError);
-      ocrFailure = ocrError;
-      lastError = ocrError;
+    if (!ocrAttempted) {
+      try {
+        extraction = await scanWithOcrSpace(imageBuffer, mimeType);
+        scanProvider = 'OCR.Space';
+        console.info('[ReceiptScanner] Receipt extracted with OCR.Space fallback.');
+      } catch (ocrError: any) {
+        console.error('[ReceiptScanner] OCR.Space fallback failed:', ocrError);
+        ocrFailure = ocrError;
+        lastError = ocrError;
+      }
     }
 
     if (!extraction) {
@@ -375,12 +383,13 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       timeZone: 'Asia/Jakarta'
     });
     const replyText = 
-      `🧾 *Struk Berhasil Dianalisis AI!*\n\n` +
+      `🧾 *Struk Berhasil ${scanProvider === 'OCR.Space' ? 'Diproses dengan OCR.Space' : 'Dianalisis AI'}!*\n\n` +
       `🏪 *Toko:* ${merchant}\n` +
       `💰 *Total:* ${formatRp(amount)}\n` +
       `🏷️ *Kategori:* ${category}\n` +
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
       (data.amountSource === 'subtotal' ? '⚠️ Total akhir tidak terlihat; nominal dicatat dari subtotal yang terbaca.\n' : '') +
+      (ocrFailure && scanProvider === 'Gemini' ? '⚠️ OCR.Space tidak dapat memverifikasi nominal; periksa kembali jumlah transaksi.\n' : '') +
       `📅 *Tanggal transaksi:* ${transactionDateLabel}\n\n` +
       `✅ _Otomatis dicatat ke Google Sheets Anda!_\n_Atur tanggal lewat caption foto, misalnya: 26 September atau 23 Agustus 2025._`;
 

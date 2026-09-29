@@ -1,6 +1,7 @@
 import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
 import { scanReceiptImage } from '../lib/receipt-scanner';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const assertionFailures = [];
 const originalAssert = console.assert.bind(console);
@@ -156,7 +157,7 @@ async function runTests() {
   const previousOcrKey = process.env.OCR_SPACE_API_KEY;
   const previousGeminiKey = process.env.GEMINI_API_KEY;
   const previousFetch = globalThis.fetch;
-  let ocrParsedText = 'SPBU PERTAMINA\nJumlah Pembayaran\nRp 100.000';
+  let ocrParsedText = '20/12/2019 17:40:37 (CU)\nSTRUK PEMBAYARAN TAGIHAN\nPDAM\nIDPEL : 13802\nNAMA : WINA HARTIKA\nTAGIHAN : RP. 85.100,00\nBIAYA ADM : RP. 2.500,00\nTOTAL BAYAR : RP. 87.600,00';
   process.env.OCR_SPACE_API_KEY = 'test-ocr-key';
   delete process.env.GEMINI_API_KEY;
   globalThis.fetch = async () => ({
@@ -169,8 +170,23 @@ async function runTests() {
   });
   try {
     const ocrResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_fallback');
-    console.assert(ocrResult.success && ocrResult.transaction?.amount === 100000, 'OCR fallback failed: ' + ocrResult.replyText);
-    console.assert(ocrResult.transaction?.category === 'Transport', 'OCR category detection failed: ' + JSON.stringify(ocrResult.transaction));
+    console.assert(ocrResult.success && ocrResult.transaction?.amount === 87600, 'OCR localized amount parsing failed: ' + ocrResult.replyText);
+    console.assert(ocrResult.transaction?.category === 'Bills', 'OCR category detection failed: ' + JSON.stringify(ocrResult.transaction));
+    console.assert(ocrResult.transaction?.note.startsWith('PDAM'), 'OCR merchant detection failed: ' + JSON.stringify(ocrResult.transaction));
+
+    const previousGetGenerativeModel = GoogleGenerativeAI.prototype.getGenerativeModel;
+    GoogleGenerativeAI.prototype.getGenerativeModel = () => {
+      throw new Error('Gemini should not override a valid OCR.Space extraction.');
+    };
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    try {
+      const ocrPriorityResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_priority');
+      console.assert(ocrPriorityResult.success && ocrPriorityResult.transaction?.amount === 87600, 'OCR should take priority over Gemini: ' + ocrPriorityResult.replyText);
+    } finally {
+      GoogleGenerativeAI.prototype.getGenerativeModel = previousGetGenerativeModel;
+      delete process.env.GEMINI_API_KEY;
+    }
+
     ocrParsedText = 'BESALI CAFE\nSUBTOTAL 277,000';
     const subtotalResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_subtotal');
     console.assert(subtotalResult.success && subtotalResult.transaction?.amount === 277000, 'Subtotal fallback failed: ' + subtotalResult.replyText);
