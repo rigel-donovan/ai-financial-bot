@@ -47,6 +47,7 @@ function wait(ms: number): Promise<void> {
 
 function getOcrCategory(text: string): string {
   if (/\b(?:pertamina|pertamax|spbu|bbm|bensin|solar)\b/i.test(text)) return 'Transport';
+  if (/\b(?:bread|roti|croissant|pudding|brulee|cake|kue|kopi|coffee|cafe|restaurant|restoran|makan)\b/i.test(text)) return 'Food';
   return detectCategory(text);
 }
 
@@ -120,7 +121,20 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   // Item biasanya punya nama + harga di baris yang sama, dan bukan label total/subtotal/tax/dll
   const skipLabels = /\b(?:(?:grand\s*)?total|sub[\s-]?total|jumlah|tax|pajak|ppn|pph|disc|diskon|discount|service|charge|pembulatan|rounding|change|kembalian|tunai|cash|credit|debit|bayar|pembayaran|dpp|nett?)\b/i;
   const itemLines: string[] = [];
+  let itemSectionStarted = false;
   for (const line of lines) {
+    if (/\b(?:sub[\s-]?total|(?:grand\s*)?total|payment|debit|credit|cash|change|kembalian)\b/i.test(line)) {
+      if (itemSectionStarted) break;
+      continue;
+    }
+
+    // Only accept receipt rows shaped like "1 Product name 11.500".
+    // This drops POS identifiers, dates, payment references, and footer text.
+    if (!/^\s*\d+\s*(?:[xX×]\s*)?.+?\s+(?:rp\.?\s*)?(?:\d{1,3}(?:[.,]\d{3})+|\d{4,})\s*$/i.test(line)) {
+      continue;
+    }
+    itemSectionStarted = true;
+
     // Item line: has text + a number, but is not a total/meta label
     if (skipLabels.test(line)) continue;
     if (!/[a-z]/i.test(line)) continue;
@@ -237,6 +251,8 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
   let ocrFailure: unknown;
   let ocrAttempted = false;
 
+  // OCR.Space is fast and deterministic for clear receipts. Gemini remains the
+  // fallback for layouts where OCR cannot identify a payable total.
   if (process.env.OCR_SPACE_API_KEY) {
     ocrAttempted = true;
     try {
