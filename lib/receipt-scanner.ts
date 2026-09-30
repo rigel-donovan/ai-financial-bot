@@ -29,7 +29,7 @@ const OCR_SPACE_REQUEST_TIMEOUT_MS = 20_000;
 
 interface ReceiptExtraction {
   total_amount: number;
-  amountSource?: 'total' | 'subtotal';
+  amountSource?: 'total' | 'subtotal' | 'item_sum';
   merchant: string;
   category?: string;
   items?: string;
@@ -79,7 +79,7 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   // Pola 1: Label total eksplisit (sangat luas)
   const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)?\b|\b(?:amount|balance)\s+due\b|\bnett?\b|\bbayar\b|\bpembayaran\b|\btunai\b|\bcash\b|\bcredit\b|\bdebit\b|\bcharge\b|\bfinal\s*(?:amount|total|price)\b|\bdpp\b|\btotal\s*(?:harga|belanja|bayar|transaksi|amount|due|price|payment|bill|net|nett)?\b/i;
   let total = 0;
-  let amountSource: 'total' | 'subtotal' = 'total';
+  let amountSource: 'total' | 'subtotal' | 'item_sum' = 'total';
 
   // Cari dari bawah ke atas untuk menemukan total yang paling relevan
   for (let index = lines.length - 1; index >= 0; index--) {
@@ -104,6 +104,27 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
         amountSource = 'subtotal';
         break;
       }
+    }
+  }
+
+  // OCR tabel kadang memisahkan label Subtotal/Bayar dari nominal di kolom
+  // kanan. Bila itu terjadi, jumlahkan nominal rupiah pada rincian produk.
+  if (total <= 0) {
+    const summaryLabel = /\b(?:sub[\s-]?total|(?:grand\s*)?total|bayar|dibayar|payment|debit|credit|cash|kembali|change)\b/i;
+    const itemAmounts: number[] = [];
+
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+      if (summaryLabel.test(line) || !/\b(?:rp\.?|idr)\b/i.test(line)) continue;
+
+      let amount = extractAmountFromOcrLine(line);
+      if (!amount && lines[index + 1]) amount = extractAmountFromOcrLine(lines[index + 1]);
+      if (amount > 0) itemAmounts.push(amount);
+    }
+
+    if (itemAmounts.length > 0) {
+      total = itemAmounts.reduce((sum, amount) => sum + amount, 0);
+      amountSource = 'item_sum';
     }
   }
 
@@ -459,6 +480,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       `🏷️ *Kategori:* ${category}\n` +
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
       (data.amountSource === 'subtotal' ? '⚠️ Total akhir tidak terlihat; nominal dicatat dari subtotal yang terbaca.\n' : '') +
+      (data.amountSource === 'item_sum' ? '⚠️ Total dihitung dari nominal pada rincian item karena baris total tidak terbaca utuh.\n' : '') +
       (ocrFailure && scanProvider === 'Gemini' ? '⚠️ OCR.Space tidak dapat memverifikasi nominal; periksa kembali jumlah transaksi.\n' : '') +
       `📅 *Tanggal transaksi:* ${transactionDateLabel}\n\n` +
       `✅ _Otomatis dicatat ke Google Sheets Anda!_\n_Atur tanggal lewat caption foto, misalnya: 26 September atau 23 Agustus 2025._`;
