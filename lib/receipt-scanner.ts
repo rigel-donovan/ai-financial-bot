@@ -116,12 +116,36 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   ) || 'Toko/Merchant';
   const category = getOcrCategory(`${merchant}\n${text}`);
 
+  // Ekstrak item-item belanja dari baris OCR
+  // Item biasanya punya nama + harga di baris yang sama, dan bukan label total/subtotal/tax/dll
+  const skipLabels = /\b(?:(?:grand\s*)?total|sub[\s-]?total|jumlah|tax|pajak|ppn|pph|disc|diskon|discount|service|charge|pembulatan|rounding|change|kembalian|tunai|cash|credit|debit|bayar|pembayaran|dpp|nett?)\b/i;
+  const itemLines: string[] = [];
+  for (const line of lines) {
+    // Item line: has text + a number, but is not a total/meta label
+    if (skipLabels.test(line)) continue;
+    if (!/[a-z]/i.test(line)) continue;
+    const amount = extractAmountFromOcrLine(line);
+    if (amount > 0 && amount < total) {
+      // Extract just the name part (strip quantity prefix like "1 x" or "2x")
+      const name = line
+        .replace(/^\d+\s*[xX×]?\s*/, '')
+        .replace(/(?:rp\.?\s*)?[\d][\d.,\s]*/gi, '')
+        .replace(/^[\s:]+|[\s:]+$/g, '')
+        .trim();
+      if (name && name.length >= 2 && name.length <= 60) {
+        itemLines.push(name);
+      }
+    }
+  }
+  const items = itemLines.length > 0 ? itemLines.join(', ') : undefined;
+
   return {
     total_amount: total,
     amountSource,
     merchant,
     category,
-    note: `${merchant} (Scan Struk)`
+    items,
+    note: items ? `${merchant} - ${items}` : `${merchant} (Scan Struk)`
   };
 }
 
@@ -185,7 +209,7 @@ Analisis gambar struk ini dan ekstrak informasi berikut:
 2. merchant: nama toko / merchant / restoran / penyedia layanan (contoh: "Indomaret", "Alfamart", "Kopi Kenangan", "SPBU Pertamina", "Apotek Kimia Farma"). Jika tidak terbaca, gunakan "Toko/Merchant".
 3. category: pilih salah satu kategori yang paling cocok dari: Food, Transport, Bills, Entertainment, Shopping, Health, Donation, Lainnya.
 4. items: daftar ringkas 1-4 barang yang dibeli (contoh: "Kopi Latte, Roti").
-5. note: catatan singkat untuk deskripsi transaksi (contoh: "Indomaret - Minyak goreng, Telur").
+5. note: catatan singkat WAJIB menyertakan nama merchant dan daftar item yang dibeli. Format: "NamaToko - item1, item2, item3" (contoh: "BreadTalk - Bread Butter Pudding, Cream Brulee, Choco Croissant"). Jika item tidak terbaca, cukup nama toko saja.
 
 Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa teks lain:
 {
@@ -358,7 +382,11 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
     let category = data.category || detectCategory(data.note || data.merchant);
 
     const merchant = data.merchant || 'Struk';
-    const note = data.note || `${merchant} (Scan Struk)`;
+    const items = data.items || '';
+    // Always include items in note for Google Sheets record
+    const note = items
+      ? `${merchant} - ${items}`
+      : (data.note || `${merchant} (Scan Struk)`);
     const transactionDate = resolveReceiptDate(targetDate);
 
     const transaction: Transaction = {
