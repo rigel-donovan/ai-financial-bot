@@ -151,6 +151,32 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
       }
     }
   }
+
+  // Some receipt layouts separate columns when OCR reads them. If the strict
+  // row pattern finds nothing, use the section before Subtotal/Total and keep
+  // only lines that begin with a quantity followed by a product name.
+  if (itemLines.length === 0) {
+    const endIndex = lines.findIndex((line) => /\b(?:sub[\s-]?total|(?:grand\s*)?total)\b/i.test(line));
+    const productLines = lines.slice(0, endIndex >= 0 ? endIndex : lines.length);
+    const metadata = /\b(?:pos|check|no\.?|cashier|member|closed|debit|credit|cash|www\.|http|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d{1,2}:\d{2}/i;
+    let fallbackItemCount = 0;
+
+    for (const line of productLines) {
+      if (metadata.test(line)) continue;
+      const match = line.match(/^\s*\d{1,3}\s*(?:[xX×]\s*)?([a-z][a-z0-9 &'/-]*?)(?:\s+(?:rp\.?\s*)?(?:\d{1,3}(?:[.,]\d{3})+|\d{4,}))?\s*$/i);
+      if (!match) continue;
+
+      const name = match[1]
+        .replace(/\s+/g, ' ')
+        .replace(/\s+(?:rp\.?\s*)?(?:\d{1,3}(?:[.,]\d{3})+|\d{4,})\s*$/i, '')
+        .trim();
+      if (name.length >= 2 && name.length <= 80 && !itemLines.some((item) => item.toLowerCase() === name.toLowerCase())) {
+        itemLines.push(name);
+        fallbackItemCount += 1;
+      }
+      if (fallbackItemCount === 8) break;
+    }
+  }
   const items = itemLines.length > 0 ? itemLines.join(', ') : undefined;
 
   return {
