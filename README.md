@@ -1,4 +1,4 @@
-# WA Expense Bot 💸🤖
+# AI Financial Bot 💸🤖
 
 Chatbot pribadi untuk mencatat dan mengelola pengeluaran harian, ringkasan berkala, pengeluaran rutin bulanan, dan insight keuangan AI — berjalan di atas **Vercel Serverless**, **Google Sheets**, dan **100% GRATIS (Free Tier)**.
 
