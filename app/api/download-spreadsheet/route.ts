@@ -110,6 +110,7 @@ export async function buildSpreadsheet(
     { header: 'Jenis', key: 'type', width: 16 },
     { header: 'Kategori', key: 'category', width: 20 },
     { header: 'Catatan', key: 'note', width: 38 },
+    { header: 'Qty', key: 'qty', width: 12 },
     { header: 'Nominal', key: 'amount', width: 19 },
     { header: 'Sumber', key: 'source', width: 16 }
   ];
@@ -118,15 +119,17 @@ export async function buildSpreadsheet(
     type: transaction.type === 'income' ? 'Pemasukan' : 'Pengeluaran',
     category: transaction.category,
     note: transaction.note,
+    qty: transaction.qty || '',
     amount: transaction.amount,
     source: transaction.source === 'recurring' ? 'Rutin' : 'Manual'
   })));
   applyHeaderStyle(transactionSheet.getRow(1));
-  transactionSheet.autoFilter = `A1:F${Math.max(1, transactions.length + 1)}`;
+  transactionSheet.autoFilter = `A1:G${Math.max(1, transactions.length + 1)}`;
   for (let row = 2; row <= transactions.length + 1; row++) {
     const dataRow = transactionSheet.getRow(row);
     dataRow.getCell(1).numFmt = 'dd mmm yyyy hh:mm';
-    dataRow.getCell(5).numFmt = CURRENCY_FORMAT;
+    dataRow.getCell(5).alignment = { horizontal: 'center' };
+    dataRow.getCell(6).numFmt = CURRENCY_FORMAT;
     dataRow.alignment = { vertical: 'middle' };
     if (row % 2 === 0) {
       dataRow.eachCell((cell) => {

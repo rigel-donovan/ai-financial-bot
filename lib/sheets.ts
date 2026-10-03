@@ -132,7 +132,7 @@ export async function ensureSheetStructure(): Promise<void> {
     // 1. Transactions Sheet Header & Migration
     const txHeader = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A1:I1'
+      range: 'transactions!A1:J1'
     });
     const txRow0 = txHeader.data.values?.[0] || [];
 
@@ -140,10 +140,10 @@ export async function ensureSheetStructure(): Promise<void> {
       // Empty sheet
       await sheets.spreadsheets.values.update({
         spreadsheetId: sheetId,
-        range: 'transactions!A1:I1',
+        range: 'transactions!A1:J1',
         valueInputOption: 'USER_ENTERED',
         requestBody: {
-          values: [['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at']]
+          values: [['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at', 'qty']]
         }
       });
     } else if (txRow0[1] !== 'user_id') {
@@ -157,7 +157,7 @@ export async function ensureSheetStructure(): Promise<void> {
         const defaultUser = process.env.ALLOWED_PHONE_NUMBER || 'default_user';
         const migratedRows = allRows.map((r, idx) => {
           if (idx === 0) {
-            return ['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at'];
+            return ['id', 'user_id', 'type', 'amount', 'category', 'note', 'raw_message', 'source', 'created_at', 'qty'];
           }
           return [
             r[0] || '', // id
@@ -168,16 +168,27 @@ export async function ensureSheetStructure(): Promise<void> {
             r[4] || '', // note
             r[5] || '', // raw_message
             r[6] || 'manual', // source
-            r[7] || new Date().toISOString() // created_at
+            r[7] || new Date().toISOString(), // created_at
+            '' // qty (legacy rows don't have qty)
           ];
         });
         await sheets.spreadsheets.values.update({
           spreadsheetId: sheetId,
-          range: 'transactions!A1:I',
+          range: 'transactions!A1:J',
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: migratedRows }
         });
       }
+    } else if (!txRow0[9] || txRow0[9] !== 'qty') {
+      // Sheet has user_id but missing qty header in column J
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: 'transactions!J1',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [['qty']]
+        }
+      });
     }
 
     // 2. Recurring Expenses Header & Migration
@@ -270,7 +281,7 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
   const { sheets, sheetId } = client;
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: 'transactions!A:I',
+    range: 'transactions!A:J',
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: {
@@ -284,7 +295,8 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
           tx.note,
           tx.raw_message,
           tx.source,
-          tx.created_at
+          tx.created_at,
+          tx.qty || ''
         ]
       ]
     }
@@ -307,12 +319,13 @@ export async function getAllTransactions(userId?: string): Promise<Transaction[]
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:I'
+      range: 'transactions!A2:J'
     });
 
     const rows = res.data.values || [];
     const all = rows.map((r) => {
       if (r.length >= 9 || r[2] === 'expense' || r[2] === 'income') {
+        const qtyVal = r[9] ? parseInt(r[9], 10) : undefined;
         return {
           id: r[0] || '',
           user_id: r[1] || '',
@@ -322,7 +335,8 @@ export async function getAllTransactions(userId?: string): Promise<Transaction[]
           note: r[5] || '',
           raw_message: r[6] || '',
           source: (r[7] as 'manual' | 'recurring') || 'manual',
-          created_at: r[8] || new Date().toISOString()
+          created_at: r[8] || new Date().toISOString(),
+          qty: qtyVal && qtyVal > 0 ? qtyVal : undefined
         };
       } else {
         return {
@@ -394,7 +408,7 @@ export async function deleteTransaction(criteria?: {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:I'
+      range: 'transactions!A2:J'
     });
 
     const rows = res.data.values || [];
@@ -455,7 +469,8 @@ export async function deleteTransaction(criteria?: {
           note: rowToDelete[5] || '',
           raw_message: rowToDelete[6] || '',
           source: (rowToDelete[7] as any) || 'manual',
-          created_at: rowToDelete[8] || ''
+          created_at: rowToDelete[8] || '',
+          qty: rowToDelete[9] ? parseInt(rowToDelete[9], 10) : undefined
         }
       : {
           id: rowToDelete[0] || '',
@@ -474,14 +489,14 @@ export async function deleteTransaction(criteria?: {
       const lastRowIndex = rows.length + 1;
       await sheets.spreadsheets.values.clear({
         spreadsheetId: sheetId,
-        range: `transactions!A${lastRowIndex}:I${lastRowIndex}`
+        range: `transactions!A${lastRowIndex}:J${lastRowIndex}`
       });
     } else {
-      // Remove from array and rewrite transactions!A2:I
+      // Remove from array and rewrite transactions!A2:J
       rows.splice(targetIdx, 1);
       await sheets.spreadsheets.values.clear({
         spreadsheetId: sheetId,
-        range: 'transactions!A2:I'
+        range: 'transactions!A2:J'
       });
       if (rows.length > 0) {
         await sheets.spreadsheets.values.update({
@@ -514,6 +529,7 @@ export interface EditTransactionOptions {
     targetDate?: string;
   };
   newAmount?: number;
+  newQty?: number;
   newNote?: string;
   newCategory?: string;
   newDate?: string;
@@ -613,7 +629,7 @@ export async function editTransaction(
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'transactions!A2:I'
+      range: 'transactions!A2:J'
     });
 
     const rows = res.data.values || [];
@@ -698,7 +714,8 @@ export async function editTransaction(
           note: row[5] || '',
           raw_message: row[6] || '',
           source: (row[7] as any) || 'manual',
-          created_at: row[8] || ''
+          created_at: row[8] || '',
+          qty: row[9] ? parseInt(row[9], 10) : undefined
         }
       : {
           id: row[0] || '',
@@ -743,6 +760,14 @@ export async function editTransaction(
           range: `transactions!I${targetRowIndex}`,
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: [[updatedCreatedAt]] }
+        });
+      }
+      if (opts.newQty !== undefined) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `transactions!J${targetRowIndex}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[opts.newQty || '']] }
         });
       }
     } else {

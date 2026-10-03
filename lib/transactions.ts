@@ -83,18 +83,20 @@ function buildSuccessTemplate(title: string, lines: string[], footer?: string): 
 }
 
 const responseTemplates = {
-  recordExpense: (ctx: { amount: number; category: string; note: string; date?: string; time: string; }) =>
+  recordExpense: (ctx: { amount: number; qty?: number; category: string; note: string; date?: string; time: string; }) =>
     buildSuccessTemplate('✅ *Pengeluaran Dicatat!*', [
       `💰 *Jumlah:* ${formatRp(ctx.amount)}`,
+      ctx.qty ? `📦 *Qty:* ${ctx.qty}` : '',
       `🏷️ *Kategori:* ${ctx.category}`,
       `📝 *Catatan:* ${ctx.note}`,
       ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
       `🕒 *Waktu:* ${ctx.time}`
     ].filter(Boolean)),
 
-  recordIncome: (ctx: { amount: number; category: string; note: string; date?: string; time: string; }) =>
+  recordIncome: (ctx: { amount: number; qty?: number; category: string; note: string; date?: string; time: string; }) =>
     buildSuccessTemplate('✅ *Pemasukan Dicatat!*', [
       `💵 *Jumlah:* ${formatRp(ctx.amount)}`,
+      ctx.qty ? `📦 *Qty:* ${ctx.qty}` : '',
       `🏷️ *Kategori:* ${ctx.category}`,
       `📝 *Catatan:* ${ctx.note}`,
       ctx.date ? `📅 *Tanggal:* ${ctx.date}` : '',
@@ -327,6 +329,7 @@ async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promi
     user_id: userId,
     type: 'expense',
     amount: parsed.amount,
+    qty: parsed.qty,
     category: parsed.category || 'Lainnya',
     note: parsed.note || 'Pengeluaran',
     raw_message: parsed.rawMessage,
@@ -338,6 +341,7 @@ async function handleRecordExpense(parsed: ParsedIntent, userId?: string): Promi
 
   const replyText = responseTemplates.recordExpense({
     amount: tx.amount,
+    qty: tx.qty,
     category: tx.category,
     note: tx.note,
     date: parsed.targetDate ? formatDateLabel(parsed.targetDate) : undefined,
@@ -363,6 +367,7 @@ async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promis
     user_id: userId,
     type: 'income',
     amount: parsed.amount,
+    qty: parsed.qty,
     category: parsed.category || 'Income',
     note: parsed.note || 'Pemasukan',
     raw_message: parsed.rawMessage,
@@ -374,6 +379,7 @@ async function handleRecordIncome(parsed: ParsedIntent, userId?: string): Promis
 
   const replyText = responseTemplates.recordIncome({
     amount: tx.amount,
+    qty: tx.qty,
     category: tx.category,
     note: tx.note,
     date: parsed.targetDate ? formatDateLabel(parsed.targetDate) : undefined,

@@ -388,6 +388,14 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
     const raw = match[0];
     const index = match.index ?? 0;
 
+    // Guard: Abaikan jika angka ini segera diikuti satuan kuantitas (seperti "100 pcs", "50 cup")
+    // kecuali angka tersebut memiliki prefix atau suffix mata uang (rp, idr, k, rb, jt)
+    const textAfter = text.slice(index + raw.length, index + raw.length + 15).trim().toLowerCase();
+    const isQtyUnit = /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr|x\b)/i.test(textAfter);
+    if (isQtyUnit && !/[k|rb|ribu|jt|juta|m|rp|idr]/i.test(raw)) {
+      continue;
+    }
+
     const num = parseInt(raw.replace(/[^\d]/g, ''), 10);
     if (num >= 2020 && num <= 2035 && !/[k|rb|ribu|jt|juta|m|rp|idr]/i.test(raw)) {
       const textBefore = text.slice(Math.max(0, index - 25), index).toLowerCase();
@@ -432,11 +440,41 @@ export function extractDateContextFromText(text: string): { targetDate?: string;
   } : null;
 }
 
+/**
+ * Extract quantity (qty) from text like "30 pcs", "5 buah", "2 porsi", "3x", "10 cup", etc.
+ * Returns { qty, raw } or null if no quantity found.
+ */
+function extractQty(text: string): { qty: number; raw: string } | null {
+  // Pattern: <number> <unit> — e.g. "30 pcs", "5 buah", "2 porsi", "10 cup", "3 botol"
+  const qtyMatch = text.match(
+    /(?:\b(?:sebanyak|sejumlah)\s+)?\b(\d+)\s*(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i
+  );
+  if (qtyMatch) {
+    const qty = parseInt(qtyMatch[1], 10);
+    if (qty > 0 && qty <= 99999) {
+      return { qty, raw: qtyMatch[0] };
+    }
+  }
+
+  // Pattern: <number>x — e.g. "3x", "5x" (but not amounts like "3x lipat")
+  const xMatch = text.match(/(?:\b(?:sebanyak|sejumlah)\s+)?\b(\d+)\s*[xX]\s*(?!lipat|ganda)/i);
+  if (xMatch) {
+    const qty = parseInt(xMatch[1], 10);
+    if (qty > 0 && qty <= 99999) {
+      return { qty, raw: xMatch[0] };
+    }
+  }
+
+  return null;
+}
+
 function cleanTransactionNote(note: string): string {
   const datePhrase = /\b(?:(?:buat|untuk|pada|tanggal|tgl|di)\s+)*(?:kemarin(?:\s+lusa)?|hari\s+ini|today|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/gi;
   return note
     .replace(datePhrase, ' ')
-    .replace(/\b(?:sebesar|buat|untuk|pada|tanggal|tgl|di)\s*$/i, '')
+    // Hapus kata penghubung sebelum atau sesudah nominal: "sebesar", "senilai", "seharga", "dengan harga", "totalnya", "harganya", "sejumlah", "total", "nominal"
+    .replace(/\b(?:sebesar|senilai|seharga|sejumlah|dengan\s+(?:harga|total|nominal)|harga(?:nya)?|total(?:nya)?|nominal(?:nya)?|(?:dengan|dgn)\s+harga)\b/gi, ' ')
+    .replace(/\b(?:buat|untuk|pada|tanggal|tgl|di)\s*$/i, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,;:-]+|[\s,;:-]+$/g, '')
     .trim();
@@ -931,14 +969,20 @@ export function parseMessage(
     const amount = parseAmount(incomeMatch[1]);
     const rest = (incomeMatch[2] || '').trim();
     if (amount) {
+      const qtyInfo = extractQty(rest);
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim()) || 'Pemasukan';
+      let restWithoutHashtag = rest.replace(/#\w+/, '').trim();
+      if (qtyInfo) {
+        restWithoutHashtag = restWithoutHashtag.replace(qtyInfo.raw, ' ').replace(/\s+/g, ' ').trim();
+      }
+      const cleanNote = cleanTransactionNote(restWithoutHashtag) || 'Pemasukan';
       const category = detectCategory(cleanNote, hashtagCategory || 'Income', customCategoryMap);
 
       return {
         intent: 'RECORD_INCOME',
         amount,
+        qty: qtyInfo?.qty,
         note: cleanNote,
         category,
         targetDate: dateContext?.targetDate,
@@ -959,14 +1003,20 @@ export function parseMessage(
     const amount = parseAmount(expensePrefixMatch[1]);
     const rest = (expensePrefixMatch[2] || '').trim();
     if (amount) {
+      const qtyInfo = extractQty(rest);
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim()) || 'Pengeluaran';
+      let restWithoutHashtag = rest.replace(/#\w+/, '').trim();
+      if (qtyInfo) {
+        restWithoutHashtag = restWithoutHashtag.replace(qtyInfo.raw, ' ').replace(/\s+/g, ' ').trim();
+      }
+      const cleanNote = cleanTransactionNote(restWithoutHashtag) || 'Pengeluaran';
       const category = detectCategory(cleanNote, hashtagCategory, customCategoryMap);
 
       return {
         intent: 'RECORD_EXPENSE',
         amount,
+        qty: qtyInfo?.qty,
         note: cleanNote,
         category,
         targetDate: dateContext?.targetDate,
@@ -994,14 +1044,20 @@ export function parseMessage(
     const isReasonableAmount = hasUnit || (amount !== null && amount >= 500);
 
     if (amount && isReasonableAmount && !isDatePattern && rest && isNaN(Number(rest))) {
+      const qtyInfo = extractQty(rest);
       const hashtagMatch = rest.match(/#(\w+)/);
       const hashtagCategory = hashtagMatch ? hashtagMatch[1] : undefined;
-      const cleanNote = cleanTransactionNote(rest.replace(/#\w+/, '').trim());
+      let restWithoutHashtag = rest.replace(/#\w+/, '').trim();
+      if (qtyInfo) {
+        restWithoutHashtag = restWithoutHashtag.replace(qtyInfo.raw, ' ').replace(/\s+/g, ' ').trim();
+      }
+      const cleanNote = cleanTransactionNote(restWithoutHashtag) || 'Pengeluaran';
       const category = detectCategory(cleanNote, hashtagCategory, customCategoryMap);
 
       return {
         intent: 'RECORD_EXPENSE',
         amount,
+        qty: qtyInfo?.qty,
         note: cleanNote,
         category,
         targetDate: dateContext?.targetDate,
@@ -1064,7 +1120,12 @@ export function parseMessage(
     });
 
     if (isIncome) {
-      let cleanNote = cleanTransactionNote(note
+      const qtyInfo = extractQty(note);
+      let noteToClean = note;
+      if (qtyInfo) {
+        noteToClean = noteToClean.replace(qtyInfo.raw, ' ');
+      }
+      let cleanNote = cleanTransactionNote(noteToClean
         .replace(/^(?:masuk|pemasukan|income|in|m)\s+/i, '')
         .replace(/^(?:dapat|dapet|terima)\s+(?:uang\s+|transferan\s+)?/i, '')
         .trim());
@@ -1073,6 +1134,7 @@ export function parseMessage(
       return {
         intent: 'RECORD_INCOME',
         amount,
+        qty: qtyInfo?.qty,
         note: cleanNote,
         category,
         targetDate: dateContext?.targetDate,
@@ -1082,9 +1144,15 @@ export function parseMessage(
     }
 
     // Expense
-    let cleanNote = cleanTransactionNote(note
+    const qtyInfo = extractQty(note);
+    let noteToClean = note;
+    if (qtyInfo) {
+      noteToClean = noteToClean.replace(qtyInfo.raw, ' ');
+    }
+    let cleanNote = cleanTransactionNote(noteToClean
       .replace(/^(?:keluar|expense|out|k)\s+/i, '')
       .replace(/^(?:tadi\s+|kemarin\s+)?(?:abis\s+|habis\s+)?/i, '')
+      .replace(/^(?:beli|order|pesan|bayar)\s+/i, '')
       .replace(/\b(?:abis|habis)\b/gi, '')
       .trim());
 
@@ -1093,6 +1161,7 @@ export function parseMessage(
     return {
       intent: 'RECORD_EXPENSE',
       amount,
+      qty: qtyInfo?.qty,
       note: cleanNote,
       category,
       targetDate: dateContext?.targetDate,

@@ -41,7 +41,12 @@ ATURAN KRITIS (WAJIB DIPATUHI):
 5. Pahami bahasa gaul: "gw", "gue", "gua" = saya, "lu", "lo" = kamu, "duit"/"doku" = uang, "abis"/"habis" = menghabiskan.
 6. Pahami typo ringan: "pngeluaran" = pengeluaran, "pmsukan" = pemasukan, "lggnanan" = langganan, "donlod" = download.
 7. Pahami singkatan nominal: 25k/25rb/25ribu = 25.000, 1.5jt/1,5juta = 1.500.000, 500 = 500.
-8. Kembalikan JSON SAJA tanpa penjelasan, tanpa markdown, tanpa backtick.
+8. ATURAN KUANTITAS (QTY) & CATATAN (NOTE):
+   - Jika pengguna menyebutkan kuantitas/jumlah barang (contoh: 30 pcs, 5 buah, 2 cup, 3 porsi, 10 box, 2x), ekstrak angkanya saja ke field 'qty' (contoh: 30, 5, 2, 3, 10, 2).
+   - HAPUS kata penghubung nominal seperti 'sebesar', 'senilai', 'seharga', 'sejumlah', 'totalnya', 'harganya' dari note/keterangan agar catatan bersih dan rapi.
+   - HAPUS kuantitas (seperti '30 pcs') dari note jika sudah dimasukkan ke 'qty'.
+   Contoh: "penjualan es teh manis 30 pcs sebesar 250k" => amount: 250000, qty: 30, note: "penjualan es teh manis", category: "Income".
+9. Kembalikan JSON SAJA tanpa penjelasan, tanpa markdown, tanpa backtick.
 
 KLASIFIKASI INTENT:
 - "expense": mencatat pengeluaran BARU (WAJIB ada nominal uang)
@@ -91,7 +96,8 @@ Format output JSON:
 {
   "type": "list_all" | "list_expenses" | "list_incomes" | "list_recurring" | "add_recurring" | "delete_recurring" | "help_recurring" | "summary" | "summary_profit" | "expense" | "income" | "advice" | "menu" | "delete" | "edit" | "download_sheet" | "other",
   "amount": number,
-  "note": "keterangan singkat",
+  "qty": number,
+  "note": "keterangan singkat (bersih tanpa kata 'sebesar', 'senilai', 'seharga', 'totalnya')",
   "category": "kategori yang sesuai",
   "target_query": "kata untuk cari transaksi lama",
   "period": "day" | "week" | "month" | "year",
@@ -106,6 +112,8 @@ CONTOH LENGKAP (pelajari pola-polanya):
 
 Catat Pengeluaran:
 - "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}
+- "beli ayam geprek 5 porsi seharga 75rb" => {"type":"expense","amount":75000,"qty":5,"note":"ayam geprek","category":"Food"}
+- "order kopi susu 3 cup total 45k" => {"type":"expense","amount":45000,"qty":3,"note":"kopi susu","category":"Food"}
 - "abis 50k makan" => {"type":"expense","amount":50000,"note":"makan","category":"Food"}
 - "bensin 100rb" => {"type":"expense","amount":100000,"note":"bensin","category":"Transport"}
 - "bayar listrik 350k" => {"type":"expense","amount":350000,"note":"listrik","category":"Bills"}
@@ -114,6 +122,7 @@ Catat Pengeluaran:
 - "nonton bioskop 75k berdua" => {"type":"expense","amount":75000,"note":"nonton bioskop berdua","category":"Entertainment"}
 
 Catat Pemasukan:
+- "penjualan es teh manis 30 pcs sebesar 250k" => {"type":"income","amount":250000,"qty":30,"note":"penjualan es teh manis","category":"Income"}
 - "gaji 5jt" => {"type":"income","amount":5000000,"note":"gaji","category":"Income"}
 - "dapat transferan 500rb" => {"type":"income","amount":500000,"note":"transferan","category":"Income"}
 - "bonus 1.5jt" => {"type":"income","amount":1500000,"note":"bonus","category":"Income"}
@@ -313,14 +322,25 @@ Other (bukan keuangan):
         };
       }
 
+      const cleanAiNote = (n?: string) => {
+        if (!n) return '';
+        return n
+          .replace(/\b(?:sebesar|senilai|seharga|sejumlah|dengan\s+(?:harga|total|nominal)|harga(?:nya)?|total(?:nya)?|nominal(?:nya)?)\b/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      };
+
       if (parsed.type === 'expense') {
         const amount = Number(parsed.amount) || 0;
         if (amount > 0) {
-          const note = (parsed.note || 'Pengeluaran').trim();
+          const rawNote = (parsed.note || 'Pengeluaran').trim();
+          const note = cleanAiNote(rawNote) || 'Pengeluaran';
+          const qty = Number(parsed.qty) > 0 ? Number(parsed.qty) : undefined;
           const category = parsed.category || detectCategory(note, undefined, customCategoryMap);
           return {
             intent: 'RECORD_EXPENSE',
             amount,
+            qty,
             note,
             category,
             targetDate,
@@ -333,11 +353,14 @@ Other (bukan keuangan):
       if (parsed.type === 'income') {
         const amount = Number(parsed.amount) || 0;
         if (amount > 0) {
-          const note = (parsed.note || 'Pemasukan').trim();
+          const rawNote = (parsed.note || 'Pemasukan').trim();
+          const note = cleanAiNote(rawNote) || 'Pemasukan';
+          const qty = Number(parsed.qty) > 0 ? Number(parsed.qty) : undefined;
           const category = parsed.category || detectCategory(note, 'Income', customCategoryMap);
           return {
             intent: 'RECORD_INCOME',
             amount,
+            qty,
             note,
             category,
             targetDate,

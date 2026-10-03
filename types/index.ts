@@ -5,6 +5,7 @@ export interface Transaction {
   user_id?: string;
   type: TransactionType;
   amount: number;
+  qty?: number;
   category: string;
   note: string;
   raw_message: string;
@@ -54,6 +55,7 @@ export type IntentType =
 export interface ParsedIntent {
   intent: IntentType;
   amount?: number;
+  qty?: number;
   note?: string;
   category?: string;
   rawMessage: string;
