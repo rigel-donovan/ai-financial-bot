@@ -33,6 +33,7 @@ interface ReceiptExtraction {
   merchant: string;
   category?: string;
   items?: string;
+  qty?: number;
   note?: string;
 }
 
@@ -200,12 +201,31 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   }
   const items = itemLines.length > 0 ? itemLines.join(', ') : undefined;
 
+  // Deteksi kuantitas total (Total Item: 4, Total Qty: 4, atau hitungan baris item)
+  let detectedQty: number | undefined;
+  for (const line of lines) {
+    const qtySummaryMatch = line.match(/\b(?:total\s*(?:item|items?|qty|pcs|barang|kuantitas)|items?|qty|pcs)\s*[:=]?\s*(\d+)\b/i);
+    if (qtySummaryMatch) {
+      const q = parseInt(qtySummaryMatch[1], 10);
+      if (q > 0 && q <= 9999) {
+        detectedQty = q;
+        break;
+      }
+    }
+  }
+
+  // Jika tidak ada baris ringkasan kuantitas, hitung dari jumlah item yang terbaca
+  if (!detectedQty && itemLines.length > 0) {
+    detectedQty = itemLines.length;
+  }
+
   return {
     total_amount: total,
     amountSource,
     merchant,
     category,
     items,
+    qty: detectedQty,
     note: items ? `${merchant} - ${items}` : `${merchant} (Scan Struk)`
   };
 }
@@ -267,14 +287,16 @@ export async function scanReceiptImage(
 Kamu adalah asisten keuangan pribadi yang ahli membaca struk belanja, bon kasir, struk ATM, atau invoice di Indonesia.
 Analisis gambar struk ini dan ekstrak informasi berikut:
 1. total_amount: angka total nominal akhir yang dibayarkan (hanya angka bulat positif, tanpa titik/koma/Rp, contoh: 45000). Jika ada diskon/pajak, ambil nilai FINAL yang dibayar pembeli.
-2. merchant: nama toko / merchant / restoran / penyedia layanan (contoh: "Indomaret", "Alfamart", "Kopi Kenangan", "SPBU Pertamina", "Apotek Kimia Farma"). Jika tidak terbaca, gunakan "Toko/Merchant".
-3. category: pilih salah satu kategori yang paling cocok dari: Food, Transport, Bills, Entertainment, Shopping, Health, Donation, Lainnya.
-4. items: daftar ringkas 1-4 barang yang dibeli (contoh: "Kopi Latte, Roti").
-5. note: catatan singkat WAJIB menyertakan nama merchant dan daftar item yang dibeli. Format: "NamaToko - item1, item2, item3" (contoh: "BreadTalk - Bread Butter Pudding, Cream Brulee, Choco Croissant"). Jika item tidak terbaca, cukup nama toko saja.
+2. qty: total kuantitas/jumlah seluruh item/barang yang dibeli dalam struk (angka bulat positif, contoh: jika beli 4 roti maka 4, jika struk menunjukkan 'Total Items: 4' atau 4 baris item masing-masing 1 pcs maka isi 4). Jika tidak ada info jumlah atau hanya beli 1 item/bensin/parkir, isi minimal 1.
+3. merchant: nama toko / merchant / restoran / penyedia layanan (contoh: "Indomaret", "Alfamart", "Kopi Kenangan", "SPBU Pertamina", "Apotek Kimia Farma"). Jika tidak terbaca, gunakan "Toko/Merchant".
+4. category: pilih salah satu kategori yang paling cocok dari: Food, Transport, Bills, Entertainment, Shopping, Health, Donation, Lainnya.
+5. items: daftar ringkas 1-4 barang yang dibeli (contoh: "Kopi Latte, Roti").
+6. note: catatan singkat WAJIB menyertakan nama merchant dan daftar item yang dibeli. Format: "NamaToko - item1, item2, item3" (contoh: "BreadTalk - Bread Butter Pudding, Cream Brulee, Choco Croissant"). Jika item tidak terbaca, cukup nama toko saja.
 
 Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa teks lain:
 {
   "total_amount": 45000,
+  "qty": 2,
   "merchant": "Indomaret",
   "category": "Shopping",
   "items": "Minyak goreng, Telur",
@@ -451,12 +473,14 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       ? `${merchant} - ${items}`
       : (data.note || `${merchant} (Scan Struk)`);
     const transactionDate = resolveReceiptDate(targetDate);
+    const qty = Number(data.qty) > 0 ? Number(data.qty) : (data.items ? 1 : undefined);
 
     const transaction: Transaction = {
       id: crypto.randomUUID(),
       user_id: userId,
       type: 'expense',
       amount,
+      qty,
       category,
       note,
       raw_message: `[Scan Struk] ${merchant} - Rp${amount}`,
@@ -477,6 +501,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       `🧾 *Struk Berhasil ${scanProvider === 'OCR.Space' ? 'Diproses dengan OCR.Space' : 'Dianalisis AI'}!*\n\n` +
       `🏪 *Toko:* ${merchant}\n` +
       `💰 *Total:* ${formatRp(amount)}\n` +
+      (qty ? `📦 *Qty:* ${qty}\n` : '') +
       `🏷️ *Kategori:* ${category}\n` +
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
       (data.amountSource === 'subtotal' ? '⚠️ Total akhir tidak terlihat; nominal dicatat dari subtotal yang terbaca.\n' : '') +

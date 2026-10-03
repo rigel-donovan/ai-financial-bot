@@ -475,6 +475,7 @@ function cleanTransactionNote(note: string): string {
     // Hapus kata penghubung sebelum atau sesudah nominal: "sebesar", "senilai", "seharga", "dengan harga", "totalnya", "harganya", "sejumlah", "total", "nominal"
     .replace(/\b(?:sebesar|senilai|seharga|sejumlah|dengan\s+(?:harga|total|nominal)|harga(?:nya)?|total(?:nya)?|nominal(?:nya)?|(?:dengan|dgn)\s+harga)\b/gi, ' ')
     .replace(/\b(?:buat|untuk|pada|tanggal|tgl|di)\s*$/i, '')
+    .replace(/^(?:buat|untuk|pada|di)\s+/i, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,;:-]+|[\s,;:-]+$/g, '')
     .trim();
@@ -963,7 +964,7 @@ export function parseMessage(
   // masuk 500k bonus
   // masuk 150rb freelance
   const incomeMatch = trimmed.match(
-    /^(?:masuk|income|in|m)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
+    /^(?:(?:catat\s+)?(?:masuk|income|pemasukan|in|m)|catat\s+masuk)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
   );
   if (incomeMatch) {
     const amount = parseAmount(incomeMatch[1]);
@@ -997,7 +998,7 @@ export function parseMessage(
   // k 25k kopi susu
   // keluar 150rb belanja
   const expensePrefixMatch = trimmed.match(
-    /^(?:keluar|expense|out|k)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
+    /^(?:(?:catat\s+)?(?:keluar|expense|pengeluaran|out|k)|catat\s+keluar)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
   );
   if (expensePrefixMatch) {
     const amount = parseAmount(expensePrefixMatch[1]);
@@ -1010,6 +1011,7 @@ export function parseMessage(
       if (qtyInfo) {
         restWithoutHashtag = restWithoutHashtag.replace(qtyInfo.raw, ' ').replace(/\s+/g, ' ').trim();
       }
+      restWithoutHashtag = restWithoutHashtag.replace(/^(?:beli|order|pesan|bayar)\s+/i, '');
       const cleanNote = cleanTransactionNote(restWithoutHashtag) || 'Pengeluaran';
       const category = detectCategory(cleanNote, hashtagCategory, customCategoryMap);
 
@@ -1126,7 +1128,7 @@ export function parseMessage(
         noteToClean = noteToClean.replace(qtyInfo.raw, ' ');
       }
       let cleanNote = cleanTransactionNote(noteToClean
-        .replace(/^(?:masuk|pemasukan|income|in|m)\s+/i, '')
+        .replace(/^(?:catat\s+)?(?:masuk|pemasukan|income|in|m)\s+/i, '')
         .replace(/^(?:dapat|dapet|terima)\s+(?:uang\s+|transferan\s+)?/i, '')
         .trim());
       if (!cleanNote) cleanNote = 'Pemasukan';
@@ -1150,7 +1152,7 @@ export function parseMessage(
       noteToClean = noteToClean.replace(qtyInfo.raw, ' ');
     }
     let cleanNote = cleanTransactionNote(noteToClean
-      .replace(/^(?:keluar|expense|out|k)\s+/i, '')
+      .replace(/^(?:catat\s+)?(?:keluar|expense|pengeluaran|out|k)\s+/i, '')
       .replace(/^(?:tadi\s+|kemarin\s+)?(?:abis\s+|habis\s+)?/i, '')
       .replace(/^(?:beli|order|pesan|bayar)\s+/i, '')
       .replace(/\b(?:abis|habis)\b/gi, '')

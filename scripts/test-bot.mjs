@@ -205,6 +205,11 @@ async function runTests() {
     const subtotalResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_subtotal');
     console.assert(subtotalResult.success && subtotalResult.transaction?.amount === 277000, 'Subtotal fallback failed: ' + subtotalResult.replyText);
     console.assert(subtotalResult.replyText.includes('nominal dicatat dari subtotal'), 'Subtotal fallback warning missing: ' + subtotalResult.replyText);
+    ocrParsedText = 'Gramedia Bookstore\n1 Buku Tulis 15.000\n1 Pulpen Gel 10.000\nTOTAL ITEMS : 2\nTOTAL BAYAR : 25.000';
+    const ocrQtyReceipt = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_items_qty');
+    console.assert(ocrQtyReceipt.success && ocrQtyReceipt.transaction?.amount === 25000 && ocrQtyReceipt.transaction?.qty === 2, 'Receipt qty extraction failed: ' + ocrQtyReceipt.replyText);
+    console.assert(ocrQtyReceipt.replyText.includes('Qty:* 2'), 'Receipt reply missing qty line: ' + ocrQtyReceipt.replyText);
+
     ocrParsedText = 'SPBU PERTAMINA\nBENSIN 100.000';
     const unreadableTotal = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_error');
     console.assert(!unreadableTotal.success && unreadableTotal.replyText.includes('OCR.Space tidak dapat mengenali total pembayaran'), 'OCR fallback error detail missing: ' + unreadableTotal.replyText);
@@ -267,6 +272,18 @@ async function runTests() {
 
   const q7 = parseMessage('10k es teh 2 cup');
   console.assert(q7.intent === 'RECORD_EXPENSE' && q7.amount === 10000 && q7.qty === 2 && q7.note === 'es teh', 'q7 failed: ' + JSON.stringify(q7));
+
+  const q8 = parseMessage('catat pengeluaran 50rb 2 bungkus rokok');
+  console.assert(q8.intent === 'RECORD_EXPENSE' && q8.amount === 50000 && q8.qty === 2 && q8.note === 'rokok', 'q8 failed: ' + JSON.stringify(q8));
+
+  const q9 = parseMessage('pengeluaran 250k es teh manis 30 pcs');
+  console.assert(q9.intent === 'RECORD_EXPENSE' && q9.amount === 250000 && q9.qty === 30 && q9.note === 'es teh manis', 'q9 failed: ' + JSON.stringify(q9));
+
+  const q10 = parseMessage('beli es teh manis 30 pcs sebesar 250k');
+  console.assert(q10.intent === 'RECORD_EXPENSE' && q10.amount === 250000 && q10.qty === 30 && q10.note === 'es teh manis', 'q10 failed: ' + JSON.stringify(q10));
+
+  const q11 = parseMessage('catat pengeluaran 250k buat es teh manis 30 pcs');
+  console.assert(q11.intent === 'RECORD_EXPENSE' && q11.amount === 250000 && q11.qty === 30 && q11.note === 'es teh manis', 'q11 failed: ' + JSON.stringify(q11));
   console.log('✓ Qty and clean note tests passed!');
 
   console.log('✓ parseMessage passed!');
@@ -283,18 +300,8 @@ async function runTests() {
   const dateAwareIncome = await handleUserMessage('penjualan pulsa sebesar 150k buat 28 agustus 2026', 'user_note_date');
   console.assert(dateAwareIncome.success && dateAwareIncome.replyText.includes('Catatan:* penjualan pulsa') && dateAwareIncome.replyText.includes('Tanggal:* 28 Agustus 2026') && !dateAwareIncome.replyText.includes('Catatan:* penjualan pulsa sebesar buat'), 'Date-aware income note failed: ' + dateAwareIncome.replyText);
 
-  const qtyIncome = await handleUserMessage('penjualan es teh manis 30 pcs sebesar 250k', 'user_qty_test');
-  console.assert(
-    qtyIncome.success &&
-    qtyIncome.replyText.includes('Rp250.000') &&
-    qtyIncome.replyText.includes('Qty:* 30') &&
-    qtyIncome.replyText.includes('Catatan:* penjualan es teh manis') &&
-    !qtyIncome.replyText.includes('sebesar'),
-    'Qty income test failed: ' + qtyIncome.replyText
-  );
-
   const res3 = await handleUserMessage('ringkasan bulan');
-  console.assert(res3.success && res3.replyText.includes('Rp25.000'), 'res3 failed');
+  console.assert(res3.success && res3.replyText.includes('Rp25.000'), 'res3 failed: ' + res3.replyText);
   console.log('Summary month: OK');
 
   const res4 = await handleUserMessage('edit terakhir 35000');
@@ -312,6 +319,26 @@ async function runTests() {
   const res7 = await handleUserMessage('hapus terakhir');
   console.assert(res7.success && res7.replyText.includes('Dibatalkan'), 'res7 failed');
   console.log('Delete last: OK');
+
+  const qtyIncome = await handleUserMessage('penjualan es teh manis 30 pcs sebesar 250k', 'user_qty_test');
+  console.assert(
+    qtyIncome.success &&
+    qtyIncome.replyText.includes('Rp250.000') &&
+    qtyIncome.replyText.includes('Qty:* 30') &&
+    qtyIncome.replyText.includes('Catatan:* penjualan es teh manis') &&
+    !qtyIncome.replyText.includes('sebesar'),
+    'Qty income test failed: ' + qtyIncome.replyText
+  );
+
+  const qtyExpense = await handleUserMessage('catat pengeluaran 50rb 2 bungkus rokok', 'user_exp_qty');
+  console.assert(
+    qtyExpense.success &&
+    qtyExpense.replyText.includes('Rp50.000') &&
+    qtyExpense.replyText.includes('Qty:* 2') &&
+    qtyExpense.replyText.includes('Pengeluaran Dicatat') &&
+    qtyExpense.replyText.includes('Catatan:* rokok'),
+    'Qty expense test failed: ' + qtyExpense.replyText
+  );
 
   const res8 = await handleUserMessage('list pemasukan tanggal 27 september 2026');
   console.assert(res8.success && res8.replyText.includes('27 September 2026'), 'res8 failed: ' + res8.replyText);
