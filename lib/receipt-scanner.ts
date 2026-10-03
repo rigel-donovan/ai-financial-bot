@@ -320,79 +320,74 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
   let ocrFailure: unknown;
   let ocrAttempted = false;
 
-  // OCR.Space is fast and deterministic for clear receipts. Gemini remains the
-  // fallback for layouts where OCR cannot identify a payable total.
-  if (process.env.OCR_SPACE_API_KEY) {
-    ocrAttempted = true;
-    try {
-      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
-      scanProvider = 'OCR.Space';
-      console.info('[ReceiptScanner] Receipt extracted with OCR.Space.');
-    } catch (err) {
-      ocrFailure = err;
-      lastError = err;
-      console.warn('[ReceiptScanner] OCR.Space primary scan failed; trying Gemini:', err);
+  // 1. Prioritaskan Gemini Vision terlebih dahulu (Primary AI Engine)
+  if (genAI) {
+    for (const modelName of candidateModels) {
+      for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
+        try {
+          const model = genAI.getGenerativeModel({ model: modelName });
+          const result = await Promise.race([
+            model.generateContent([
+              prompt,
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType
+                }
+              }
+            ]),
+            new Promise<never>((_, reject) => setTimeout(
+              () => reject(Object.assign(new Error('Gemini request timed out.'), { status: 504 })),
+              GEMINI_REQUEST_TIMEOUT_MS
+            ))
+          ]);
+          rawJsonText = result.response.text().trim();
+          if (rawJsonText) {
+            scanProvider = 'Gemini';
+            break;
+          }
+        } catch (err: any) {
+          const status = getGeminiErrorStatus(err);
+          const message = String(err?.message || err || 'Unknown Gemini API error');
+          const retryable = status !== undefined && RETRYABLE_GEMINI_STATUSES.has(status);
+
+          console.warn(
+            `[ReceiptScanner] Model ${modelName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS_PER_MODEL} failed ` +
+            `(HTTP ${status || 'unknown'}): ${message}`
+          );
+          modelErrors.push({ model: modelName, status, message });
+          lastError = err;
+
+          if (!retryable || attempt === MAX_GEMINI_ATTEMPTS_PER_MODEL) break;
+
+          // Exponential backoff with a small jitter prevents simultaneous retries.
+          const delayMs = (1_000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 300);
+          console.info(`[ReceiptScanner] Retrying ${modelName} in ${delayMs}ms after HTTP ${status}.`);
+          await wait(delayMs);
+        }
+      }
+
+      if (rawJsonText) break;
     }
   }
 
-  for (const modelName of !extraction && genAI ? candidateModels : []) {
-    for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
-      try {
-        const model = genAI!.getGenerativeModel({ model: modelName });
-        const result = await Promise.race([
-          model.generateContent([
-            prompt,
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType
-              }
-            }
-          ]),
-          new Promise<never>((_, reject) => setTimeout(
-            () => reject(Object.assign(new Error('Gemini request timed out.'), { status: 504 })),
-            GEMINI_REQUEST_TIMEOUT_MS
-          ))
-        ]);
-        rawJsonText = result.response.text().trim();
-        if (rawJsonText) break;
-      } catch (err: any) {
-        const status = getGeminiErrorStatus(err);
-        const message = String(err?.message || err || 'Unknown Gemini API error');
-        const retryable = status !== undefined && RETRYABLE_GEMINI_STATUSES.has(status);
-
-        console.warn(
-          `[ReceiptScanner] Model ${modelName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS_PER_MODEL} failed ` +
-          `(HTTP ${status || 'unknown'}): ${message}`
-        );
-        modelErrors.push({ model: modelName, status, message });
-        lastError = err;
-
-        if (!retryable || attempt === MAX_GEMINI_ATTEMPTS_PER_MODEL) break;
-
-        // Exponential backoff with a small jitter prevents simultaneous retries.
-        const delayMs = (1_000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 300);
-        console.info(`[ReceiptScanner] Retrying ${modelName} in ${delayMs}ms after HTTP ${status}.`);
-        await wait(delayMs);
-      }
+  // 2. Jika Gemini Vision gagal/error atau tidak ada GEMINI_API_KEY, otomatis fallback ke OCR.Space
+  if (!rawJsonText && process.env.OCR_SPACE_API_KEY) {
+    ocrAttempted = true;
+    try {
+      console.info('[ReceiptScanner] Gemini Vision tidak tersedia atau gagal; beralih otomatis ke OCR.Space...');
+      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
+      scanProvider = 'OCR.Space';
+      console.info('[ReceiptScanner] Struk berhasil diproses menggunakan OCR.Space fallback.');
+    } catch (ocrError: any) {
+      console.error('[ReceiptScanner] OCR.Space fallback gagal:', ocrError);
+      ocrFailure = ocrError;
+      lastError = ocrError;
     }
-
-    if (rawJsonText) break;
   }
 
   if (!rawJsonText && !extraction) {
-    console.error('[ReceiptScanner] All vision models failed:', modelErrors);
-    if (!ocrAttempted) {
-      try {
-        extraction = await scanWithOcrSpace(imageBuffer, mimeType);
-        scanProvider = 'OCR.Space';
-        console.info('[ReceiptScanner] Receipt extracted with OCR.Space fallback.');
-      } catch (ocrError: any) {
-        console.error('[ReceiptScanner] OCR.Space fallback failed:', ocrError);
-        ocrFailure = ocrError;
-        lastError = ocrError;
-      }
-    }
+    console.error('[ReceiptScanner] Seluruh engine pembaca struk gagal (Gemini Vision & OCR.Space):', modelErrors);
 
     if (!extraction) {
     const errorText = modelErrors.map((error) => `${error.status || ''} ${error.message}`).join(' ').toLowerCase();

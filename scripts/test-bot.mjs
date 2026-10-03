@@ -188,16 +188,54 @@ async function runTests() {
     console.assert(ocrResult.transaction?.category === 'Bills', 'OCR category detection failed: ' + JSON.stringify(ocrResult.transaction));
     console.assert(ocrResult.transaction?.note.startsWith('PDAM'), 'OCR merchant detection failed: ' + JSON.stringify(ocrResult.transaction));
 
-    const previousGetGenerativeModel = GoogleGenerativeAI.prototype.getGenerativeModel;
-    GoogleGenerativeAI.prototype.getGenerativeModel = () => {
-      throw new Error('Gemini should not override a valid OCR.Space extraction.');
+    const { createRequire } = await import('module');
+    const cjsGenAI = createRequire(import.meta.url)('@google/generative-ai');
+    const prevEsmModel = GoogleGenerativeAI.prototype.getGenerativeModel;
+    const prevCjsModel = cjsGenAI.GoogleGenerativeAI.prototype.getGenerativeModel;
+
+    const setMockGenerativeModel = (fn) => {
+      GoogleGenerativeAI.prototype.getGenerativeModel = fn;
+      cjsGenAI.GoogleGenerativeAI.prototype.getGenerativeModel = fn;
     };
+    const restoreMockGenerativeModel = () => {
+      GoogleGenerativeAI.prototype.getGenerativeModel = prevEsmModel;
+      cjsGenAI.GoogleGenerativeAI.prototype.getGenerativeModel = prevCjsModel;
+    };
+
+    // Test 1: Gemini Vision Prioritized First (Primary Engine)
+    setMockGenerativeModel(() => ({
+      generateContent: async () => ({
+        response: {
+          text: () => JSON.stringify({
+            total_amount: 99000,
+            merchant: 'Gemini Primary Cafe',
+            category: 'Food',
+            items: 'Latte, Croissant',
+            qty: 2,
+            note: 'Gemini Primary Cafe - Latte, Croissant'
+          })
+        }
+      })
+    }));
     process.env.GEMINI_API_KEY = 'test-gemini-key';
     try {
-      const ocrPriorityResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_priority');
-      console.assert(ocrPriorityResult.success && ocrPriorityResult.transaction?.amount === 87600, 'OCR should take priority over Gemini: ' + ocrPriorityResult.replyText);
+      const geminiPriorityResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_gemini_priority');
+      console.assert(geminiPriorityResult.success && geminiPriorityResult.transaction?.amount === 99000 && geminiPriorityResult.replyText.includes('Dianalisis AI'), 'Gemini Vision should be prioritized first: ' + geminiPriorityResult.replyText);
     } finally {
-      GoogleGenerativeAI.prototype.getGenerativeModel = previousGetGenerativeModel;
+      restoreMockGenerativeModel();
+      delete process.env.GEMINI_API_KEY;
+    }
+
+    // Test 2: Fallback to OCR.Space when Gemini Vision fails/errors
+    setMockGenerativeModel(() => {
+      throw new Error('Gemini Vision simulated outage / quota limit.');
+    });
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    try {
+      const ocrFallbackResult = await scanReceiptImage(Buffer.from('test-image'), 'image/jpeg', 'user_ocr_priority');
+      console.assert(ocrFallbackResult.success && ocrFallbackResult.transaction?.amount === 87600 && ocrFallbackResult.replyText.includes('OCR.Space'), 'OCR should automatically take over when Gemini fails: ' + ocrFallbackResult.replyText);
+    } finally {
+      restoreMockGenerativeModel();
       delete process.env.GEMINI_API_KEY;
     }
 
