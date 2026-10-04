@@ -154,42 +154,62 @@ async function ensureUserDashboardSheet(
   return dashboardId;
 }
 
-async function ensureUserFilterView(
+async function ensureUserDataView(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,
-  sheet: UserSheetInfo[number],
+  sheetMeta: UserSheetInfo,
   userId: string,
-  endColumnIndex: number
+  sourceTitle: 'transactions' | 'recurring_expenses',
+  viewPrefix: 'Transactions' | 'Recurring',
+  columnEnd: 'J' | 'I'
 ): Promise<number | undefined> {
-  const sheetId = sheet.properties?.sheetId;
-  if (sheetId == null) return undefined;
+  const suffix = userSheetSuffix(userId);
+  const title = `${viewPrefix} ${suffix}`;
+  let view = sheetMeta.find((sheet) => sheet.properties?.title === title);
+  let isNewView = false;
 
-  const title = `For ${userSheetSuffix(userId)}`;
-  let view = sheet.filterViews?.find((candidate) => candidate.title === title);
-  if (view?.filterViewId != null) return view.filterViewId;
-
-  const result = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{
-        addFilterView: {
-          filter: {
-            title,
-            range: { sheetId, startRowIndex: 0, startColumnIndex: 0, endColumnIndex },
-            criteria: {
-              1: {
-                condition: {
-                  type: 'TEXT_EQ',
-                  values: [{ userEnteredValue: userId }]
-                }
-              }
-            }
+  if (!view) {
+    const source = sheetMeta.find((sheet) => sheet.properties?.title === sourceTitle);
+    if (source?.properties?.sheetId == null) return undefined;
+    const copied = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId,
+      sheetId: source.properties.sheetId,
+      requestBody: { destinationSpreadsheetId: spreadsheetId }
+    });
+    if (copied.data.sheetId == null) return undefined;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: copied.data.sheetId, title },
+            fields: 'title'
           }
-        }
-      }]
+        }]
+      }
+    });
+    view = { properties: { sheetId: copied.data.sheetId, title } };
+    isNewView = true;
+  }
+
+  const viewSheetId = view.properties?.sheetId;
+  if (viewSheetId == null) return undefined;
+  const escapedUserId = userId.replace(/"/g, '""');
+  if (isNewView) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${title}'!A2:${columnEnd}`
+    });
+  }
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${title}'!A2`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[`=IFERROR(FILTER('${sourceTitle}'!A2:${columnEnd},'${sourceTitle}'!B2:B="${escapedUserId}"),"")`]]
     }
   });
-  return result.data.replies?.[0]?.addFilterView?.filter?.filterViewId ?? undefined;
+  return viewSheetId;
 }
 
 /** Prepare links to live, per-user dashboard and editable filter views. */
@@ -204,34 +224,32 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
   });
   const allSheets: UserSheetInfo = spreadsheet.data.sheets || [];
-  const transactionSheet = allSheets.find((sheet) => sheet.properties?.title === 'transactions');
-  const recurringSheet = allSheets.find((sheet) => sheet.properties?.title === 'recurring_expenses');
-  const transactionGid = transactionSheet?.properties?.sheetId;
-  const recurringGid = recurringSheet?.properties?.sheetId;
+  const transactionGid = await ensureUserDataView(
+    sheets, sheetId, allSheets, userId, 'transactions', 'Transactions', 'J'
+  );
+  const recurringGid = await ensureUserDataView(
+    sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring', 'I'
+  );
 
   let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
-  if (dashboardGid == null) dashboardGid = transactionGid ?? undefined;
+  if (dashboardGid == null) dashboardGid = transactionGid;
 
-  const transactionViewId = transactionSheet
-    ? await ensureUserFilterView(sheets, sheetId, transactionSheet, userId, 10)
-    : undefined;
-  const recurringViewId = recurringSheet
-    ? await ensureUserFilterView(sheets, sheetId, recurringSheet, userId, 9)
-    : undefined;
-
-  // Hide only the all-user dashboard template; the bot continues to use it as
-  // the source for the personalized, formula-connected dashboard copies.
-  const templateDashboard = allSheets.find((sheet) => sheet.properties?.title === 'Dashboard');
-  if (templateDashboard?.properties?.sheetId != null) {
+  // Keep all-user source tabs out of the normal tab bar. The personalized
+  // copies remain formula-connected to these tabs and refresh with bot writes.
+  const sourceSheetIds = allSheets
+    .filter((sheet) => ['transactions', 'recurring_expenses', 'Dashboard'].includes(sheet.properties?.title || ''))
+    .map((sheet) => sheet.properties?.sheetId)
+    .filter((sourceId): sourceId is number => sourceId != null);
+  if (sourceSheetIds.length > 0) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: sheetId,
       requestBody: {
-        requests: [{
+        requests: sourceSheetIds.map((sourceSheetId) => ({
           updateSheetProperties: {
-            properties: { sheetId: templateDashboard.properties.sheetId, hidden: true },
+            properties: { sheetId: sourceSheetId, hidden: true },
             fields: 'hidden'
           }
-        }]
+        }))
       }
     });
   }
@@ -241,10 +259,10 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     dashboard: `${baseUrl}#gid=${dashboardGid}`,
     transactions: transactionGid == null
       ? baseUrl
-      : `${baseUrl}#gid=${transactionGid}${transactionViewId == null ? '' : `&fvid=${transactionViewId}`}`,
+      : `${baseUrl}#gid=${transactionGid}`,
     recurring: recurringGid == null
       ? baseUrl
-      : `${baseUrl}#gid=${recurringGid}${recurringViewId == null ? '' : `&fvid=${recurringViewId}`}`
+      : `${baseUrl}#gid=${recurringGid}`
   };
 }
 
