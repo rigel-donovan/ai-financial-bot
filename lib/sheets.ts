@@ -151,6 +151,25 @@ async function ensureUserDashboardSheet(
     valueInputOption: 'RAW',
     requestBody: { values: [[userId]] }
   });
+  // The copied template's validation dropdown contains every account ID.
+  // Remove it on this personalized dashboard so it stays fixed to its owner.
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        setDataValidation: {
+          range: {
+            sheetId: dashboardId,
+            startRowIndex: 3,
+            endRowIndex: 4,
+            startColumnIndex: 7,
+            endColumnIndex: 8
+          },
+          rule: null as never
+        }
+      }]
+    }
+  });
   return dashboardId;
 }
 
