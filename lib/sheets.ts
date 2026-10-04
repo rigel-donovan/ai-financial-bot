@@ -94,6 +94,53 @@ export function isSheetsConfigured(): boolean {
   return !!getSheetsClient();
 }
 
+/** Return a live Google Sheets link with a per-user transaction Filter view. */
+export async function getUserTransactionsSpreadsheetUrl(userId: string): Promise<string | null> {
+  const client = getSheetsClient();
+  if (!client) return null;
+
+  const { sheets, sheetId } = client;
+  const baseUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/edit`;
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: sheetId,
+    fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
+  });
+  const transactionsSheet = spreadsheet.data.sheets?.find((sheet) => sheet.properties?.title === 'transactions');
+  const gid = transactionsSheet?.properties?.sheetId;
+  if (gid === undefined) return baseUrl;
+
+  const viewTitle = `Transactions for ${userId}`;
+  let filterView = transactionsSheet.filterViews?.find((view) => view.title === viewTitle);
+
+  if (!filterView?.filterViewId) {
+    const result = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: [{
+          addFilterView: {
+            filter: {
+              title: viewTitle,
+              range: { sheetId: gid, startRowIndex: 0, startColumnIndex: 0, endColumnIndex: 10 },
+              criteria: {
+                1: {
+                  condition: {
+                    type: 'TEXT_EQ',
+                    values: [{ userEnteredValue: userId }]
+                  }
+                }
+              }
+            }
+          }
+        }]
+      }
+    });
+    filterView = result.data.replies?.[0]?.addFilterView?.filter;
+  }
+
+  if (!filterView?.filterViewId) return `${baseUrl}#gid=${gid}`;
+  return `${baseUrl}#gid=${gid}&fvid=${filterView.filterViewId}`;
+}
+
 /**
  * Automatically create required tabs & header rows if spreadsheet is empty
  */
