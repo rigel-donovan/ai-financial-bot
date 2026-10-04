@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { createHash } from 'node:crypto';
 import { Transaction, RecurringExpense, CategoryMapping } from '@/types';
 
 // In-memory fallback database for local development / testing without credentials
@@ -94,7 +95,110 @@ export function isSheetsConfigured(): boolean {
   return !!getSheetsClient();
 }
 
-/** Return a live Google Sheets link with a per-user transaction Filter view. */
+function userViewSuffix(userId: string): string {
+  return createHash('sha256').update(userId).digest('hex').slice(0, 12);
+}
+
+type UserSheetMeta = Array<{
+  properties?: { sheetId?: number | null; title?: string | null } | null;
+  filterViews?: Array<{ filterViewId?: number | null; title?: string | null }> | null;
+}>;
+
+/** Create or refresh a dashboard copy whose user selector is fixed to this user. */
+async function ensureUserDashboard(
+  sheets: ReturnType<typeof google.sheets>,
+  sheetId: string,
+  sheetMeta: UserSheetMeta,
+  userId: string
+): Promise<number | undefined> {
+  const suffix = userViewSuffix(userId);
+  const title = `Dashboard ${suffix}`;
+  let dashboard = sheetMeta.find((sheet) => sheet.properties?.title === title);
+  if (!dashboard) {
+    const template = sheetMeta.find((sheet) => sheet.properties?.title === 'Dashboard');
+    if (template?.properties?.sheetId == null) return undefined;
+    const copied = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId: sheetId,
+      sheetId: template.properties.sheetId,
+      requestBody: { destinationSpreadsheetId: sheetId }
+    });
+    const newSheetId = copied.data.sheetId;
+    if (newSheetId === undefined) return undefined;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: newSheetId, title },
+            fields: 'title'
+          }
+        }]
+      }
+    });
+    dashboard = { properties: { sheetId: newSheetId, title } };
+  }
+
+  const dashboardId = dashboard.properties?.sheetId;
+  if (dashboardId == null) return undefined;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `'${title}'!H4`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[userId]] }
+  });
+  return dashboardId;
+}
+
+/** Create or refresh a live recurring-expense view containing only one user. */
+async function ensureUserRecurringView(
+  sheets: ReturnType<typeof google.sheets>,
+  sheetId: string,
+  sheetMeta: UserSheetMeta,
+  userId: string
+): Promise<void> {
+  const suffix = userViewSuffix(userId);
+  const title = `Recurring ${suffix}`;
+  let view = sheetMeta.find((sheet) => sheet.properties?.title === title);
+  if (!view) {
+    const template = sheetMeta.find((sheet) => sheet.properties?.title === 'recurring_expenses');
+    if (template?.properties?.sheetId == null) return;
+    const copied = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId: sheetId,
+      sheetId: template.properties.sheetId,
+      requestBody: { destinationSpreadsheetId: sheetId }
+    });
+    const newSheetId = copied.data.sheetId;
+    if (newSheetId === undefined) return;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: newSheetId, title },
+            fields: 'title'
+          }
+        }]
+      }
+    });
+    view = { properties: { sheetId: newSheetId, title } };
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: sheetId,
+      range: `'${title}'!A2:I`
+    });
+  }
+
+  const escapedUserId = userId.replace(/"/g, '""');
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `'${title}'!A2`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[`=IFERROR(FILTER(recurring_expenses!A2:I,recurring_expenses!B2:B="${escapedUserId}"),"")`]]
+    }
+  });
+}
+
+/** Return a live spreadsheet link to a dashboard and recurring view for this user. */
 export async function getUserTransactionsSpreadsheetUrl(userId: string): Promise<string | null> {
   const client = getSheetsClient();
   if (!client) return null;
@@ -105,7 +209,8 @@ export async function getUserTransactionsSpreadsheetUrl(userId: string): Promise
     spreadsheetId: sheetId,
     fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
   });
-  const transactionsSheet = spreadsheet.data.sheets?.find((sheet) => sheet.properties?.title === 'transactions');
+  const allSheets = spreadsheet.data.sheets || [];
+  const transactionsSheet = allSheets.find((sheet) => sheet.properties?.title === 'transactions');
   const gid = transactionsSheet?.properties?.sheetId;
   if (!transactionsSheet || gid === undefined) return baseUrl;
 
@@ -135,6 +240,33 @@ export async function getUserTransactionsSpreadsheetUrl(userId: string): Promise
       }
     });
     filterView = result.data.replies?.[0]?.addFilterView?.filter;
+  }
+
+  // Each Telegram link opens its own dashboard copy. Its formulas still read
+  // the live source tabs, while the user selector is fixed to this account.
+  await ensureUserRecurringView(sheets, sheetId, allSheets, userId);
+  const dashboardId = await ensureUserDashboard(sheets, sheetId, allSheets, userId);
+  if (dashboardId !== undefined) {
+    // Keep the shared source tabs out of the normal tab bar. The bot still
+    // reads/writes them, while Telegram opens the per-user views above.
+    const sourceTabIds = allSheets
+      .filter((sheet) => ['Dashboard', 'recurring_expenses'].includes(sheet.properties?.title || ''))
+      .map((sheet) => sheet.properties?.sheetId)
+      .filter((sourceId): sourceId is number => sourceId != null);
+    if (sourceTabIds.length > 0) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: sheetId,
+        requestBody: {
+          requests: sourceTabIds.map((sourceId) => ({
+            updateSheetProperties: {
+              properties: { sheetId: sourceId, hidden: true },
+              fields: 'hidden'
+            }
+          }))
+        }
+      });
+    }
+    return `${baseUrl}#gid=${dashboardId}`;
   }
 
   if (!filterView?.filterViewId) return `${baseUrl}#gid=${gid}`;
