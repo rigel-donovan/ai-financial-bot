@@ -417,6 +417,11 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring', 'I'
   );
 
+  // A fresh link request is also a reconciliation point: apply edits and row
+  // deletions made in either personal tab back to the shared source tabs.
+  await syncUserTransactionsToMaster(sheets, sheetId, userId);
+  await syncUserRecurringToMaster(sheets, sheetId, userId);
+
   let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
 
   // Hide shared all-user source tabs; show the editable tabs for this account.
