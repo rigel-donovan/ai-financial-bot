@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { createHash } from 'node:crypto';
 import { Transaction, RecurringExpense, CategoryMapping } from '@/types';
 
 // In-memory fallback database for local development / testing without credentials
@@ -92,6 +93,159 @@ function getSheetsClient() {
 
 export function isSheetsConfigured(): boolean {
   return !!getSheetsClient();
+}
+
+export interface UserSpreadsheetLinks {
+  dashboard: string;
+  transactions: string;
+  recurring: string;
+}
+
+type UserSheetInfo = Array<{
+  properties?: { sheetId?: number | null; title?: string | null } | null;
+  filterViews?: Array<{ filterViewId?: number | null; title?: string | null }> | null;
+}>;
+
+function userSheetSuffix(userId: string): string {
+  return createHash('sha256').update(userId).digest('hex').slice(0, 12);
+}
+
+async function ensureUserDashboardSheet(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheetMeta: UserSheetInfo,
+  userId: string
+): Promise<number | undefined> {
+  const suffix = userSheetSuffix(userId);
+  const title = `Dashboard ${suffix}`;
+  let dashboard = sheetMeta.find((sheet) => sheet.properties?.title === title);
+
+  if (!dashboard) {
+    const template = sheetMeta.find((sheet) => sheet.properties?.title === 'Dashboard');
+    if (template?.properties?.sheetId == null) return undefined;
+    const copied = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId,
+      sheetId: template.properties.sheetId,
+      requestBody: { destinationSpreadsheetId: spreadsheetId }
+    });
+    if (copied.data.sheetId == null) return undefined;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: copied.data.sheetId, title },
+            fields: 'title'
+          }
+        }]
+      }
+    });
+    dashboard = { properties: { sheetId: copied.data.sheetId, title } };
+  }
+
+  const dashboardId = dashboard.properties?.sheetId;
+  if (dashboardId == null) return undefined;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${title}'!H4`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[userId]] }
+  });
+  return dashboardId;
+}
+
+async function ensureUserFilterView(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheet: UserSheetInfo[number],
+  userId: string,
+  endColumnIndex: number
+): Promise<number | undefined> {
+  const sheetId = sheet.properties?.sheetId;
+  if (sheetId == null) return undefined;
+
+  const title = `For ${userSheetSuffix(userId)}`;
+  let view = sheet.filterViews?.find((candidate) => candidate.title === title);
+  if (view?.filterViewId != null) return view.filterViewId;
+
+  const result = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        addFilterView: {
+          filter: {
+            title,
+            range: { sheetId, startRowIndex: 0, startColumnIndex: 0, endColumnIndex },
+            criteria: {
+              1: {
+                condition: {
+                  type: 'TEXT_EQ',
+                  values: [{ userEnteredValue: userId }]
+                }
+              }
+            }
+          }
+        }
+      }]
+    }
+  });
+  return result.data.replies?.[0]?.addFilterView?.filter?.filterViewId ?? undefined;
+}
+
+/** Prepare links to live, per-user dashboard and editable filter views. */
+export async function getUserSpreadsheetLinks(userId: string): Promise<UserSpreadsheetLinks | null> {
+  const client = getSheetsClient();
+  if (!client) return null;
+
+  const { sheets, sheetId } = client;
+  const baseUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/edit`;
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: sheetId,
+    fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
+  });
+  const allSheets: UserSheetInfo = spreadsheet.data.sheets || [];
+  const transactionSheet = allSheets.find((sheet) => sheet.properties?.title === 'transactions');
+  const recurringSheet = allSheets.find((sheet) => sheet.properties?.title === 'recurring_expenses');
+  const transactionGid = transactionSheet?.properties?.sheetId;
+  const recurringGid = recurringSheet?.properties?.sheetId;
+
+  let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
+  if (dashboardGid == null) dashboardGid = transactionGid ?? undefined;
+
+  const transactionViewId = transactionSheet
+    ? await ensureUserFilterView(sheets, sheetId, transactionSheet, userId, 10)
+    : undefined;
+  const recurringViewId = recurringSheet
+    ? await ensureUserFilterView(sheets, sheetId, recurringSheet, userId, 9)
+    : undefined;
+
+  // Hide only the all-user dashboard template; the bot continues to use it as
+  // the source for the personalized, formula-connected dashboard copies.
+  const templateDashboard = allSheets.find((sheet) => sheet.properties?.title === 'Dashboard');
+  if (templateDashboard?.properties?.sheetId != null) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: templateDashboard.properties.sheetId, hidden: true },
+            fields: 'hidden'
+          }
+        }]
+      }
+    });
+  }
+
+  if (dashboardGid == null) return { dashboard: baseUrl, transactions: baseUrl, recurring: baseUrl };
+  return {
+    dashboard: `${baseUrl}#gid=${dashboardGid}`,
+    transactions: transactionGid == null
+      ? baseUrl
+      : `${baseUrl}#gid=${transactionGid}${transactionViewId == null ? '' : `&fvid=${transactionViewId}`}`,
+    recurring: recurringGid == null
+      ? baseUrl
+      : `${baseUrl}#gid=${recurringGid}${recurringViewId == null ? '' : `&fvid=${recurringViewId}`}`
+  };
 }
 
 /**

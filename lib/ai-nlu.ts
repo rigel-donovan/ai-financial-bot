@@ -63,7 +63,7 @@ KLASIFIKASI INTENT:
 - "delete_recurring": hapus/stop/nonaktifkan langganan
 - "help_recurring": bantuan tentang fitur langganan/rutin
 - "advice": saran, insight, tips, konsultasi, analisa, review keuangan
-- "download_sheet": unduh/download/export/ambil/kirim spreadsheet/excel/sheets/data/csv/file
+- "download_sheet": minta tautan untuk membuka/melihat Google Sheets, atau unduh/download/export/ambil/kirim spreadsheet/excel/data/csv/file
 - "menu": greeting/sapaan (halo, hi, hey, yo, dll), ucapan terima kasih (makasih, thanks), acknowledgment (ok, sip, siap, mantap, noted), atau minta menu/daftar fitur
 - "other": pesan yang BENAR-BENAR tidak terkait keuangan atau fitur bot apapun
 
@@ -187,6 +187,8 @@ Langganan / Rutin:
 - "cara langganan" => {"type":"help_recurring"}
 
 Download:
+- "sheet" / "spreadsheet" / "excel" => {"type":"download_sheet"}
+- "buka spreadsheet" / "link sheets" => {"type":"download_sheet"}
 - "download sheets" => {"type":"download_sheet"}
 - "export data" => {"type":"download_sheet"}
 - "unduh spreadsheet" => {"type":"download_sheet"}

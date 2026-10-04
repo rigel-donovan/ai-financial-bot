@@ -18,6 +18,7 @@ import {
   addRecurringExpense,
   toggleRecurringExpense,
   getCategoryMappings,
+  getUserSpreadsheetLinks,
 } from './sheets';
 import { generateFinancialAdvice } from './ai-advisor';
 
@@ -165,7 +166,7 @@ const responseTemplates = {
       '• `list langganan` / `tambah langganan`',
       '',
       '*📥 Download Data:*',
-      '• `download sheets` / `export data` / `unduh spreadsheet`'
+      '• `sheet` / `link spreadsheet` / `buka Google Sheets`'
     ].join('\n');
 
     return buildSuccessTemplate('🤖 Expense Bot Menu', [body]);
@@ -226,7 +227,7 @@ const responseTemplates = {
       'Untuk tanggal tertentu, tulis tanggal di caption foto, misalnya `26 September` atau `23 Agustus 2025`.',
       '',
       '*Download Spreadsheet:*',
-      '• `download sheets` / `export data` / `unduh spreadsheet`',
+      '• `sheet` / `link spreadsheet` / `buka Google Sheets`',
       '',
       'Ketik `menu` untuk melihat semua opsi cepat.'
     ];
@@ -951,26 +952,32 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
   if (!userId) {
     return {
       success: false,
-      replyText: '⚠️ Fitur unduh spreadsheet membutuhkan identitas pengguna aktif. Silakan coba lagi dari chat yang terautentikasi.'
+      replyText: 'Spreadsheet realtime tidak dapat dibuka karena identitas pengguna chat tidak tersedia.'
     };
   }
 
-  const userBaseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://wa-bot-tau.vercel.app';
-  const exportUrl = `${userBaseUrl.replace(/\/$/, '')}/api/download-spreadsheet?userId=${encodeURIComponent(userId)}`;
+  let links;
+  try {
+    links = await getUserSpreadsheetLinks(userId);
+  } catch (error) {
+    console.error('[Transactions] Failed to prepare live spreadsheet links:', error);
+    links = null;
+  }
+
+  if (!links) {
+    return {
+      success: false,
+      replyText: 'Tautan spreadsheet belum tersedia. Pastikan Google Sheets dan kredensial Service Account sudah dikonfigurasi.'
+    };
+  }
 
   return {
     success: true,
-    replyText: `📤 *Download Spreadsheet Pribadi*
-
-Data yang akan diunduh hanya mencakup transaksi milik user ini saja, dan tidak akan menampilkan data user lain.
-
-File Excel berisi tab Dashboard, transactions, dan recurring_expenses.
-
-🔐 *Privasi aktif:* data user lain akan dibuang dari file export.
-
-👉 Klik tautan berikut untuk mengunduh:
-${exportUrl}
-`
+    replyText: '?? *Spreadsheet Keuangan Realtime*\n\n' +
+      'Dashboard akun Anda: ' + links.dashboard + '\n' +
+      'Data transaksi: ' + links.transactions + '\n' +
+      'Pengeluaran rutin: ' + links.recurring + '\n\n' +
+      'Perubahan transaksi dari chatbot akan langsung tercermin di spreadsheet yang sama. Gunakan tautan transaksi atau pengeluaran rutin untuk mengolah data akun Anda.'
   };
 }
 

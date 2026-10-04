@@ -415,6 +415,17 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
   return null;
 }
 
+/** Prefer an amount explicitly introduced by words such as "sebesar" or "total". */
+function extractExplicitAmount(text: string): { amount: number; raw: string } | null {
+  const match = text.match(
+    /\b(?:sebesar|senilai|seharga|sejumlah|nominal(?:nya)?|total(?:nya)?|harga(?:nya)?)\s+((?:rp\.?\s*)?(?:\d+(?:[.,]\d+)?\s*(?:jt|juta|m|k|rb|ribu)\b|\d{1,3}(?:[.,]\d{3})+(?!\d)|\d{3,9}\b))/i
+  );
+  if (!match) return null;
+
+  const amount = parseAmount(match[1]);
+  return amount ? { amount, raw: match[1] } : null;
+}
+
 /**
  * Main intent parser
  */
@@ -521,8 +532,9 @@ export function parseMessage(
   }
 
   if (
-    /(?:download|unduh|export|ekspor|ambil|kirim|minta|buat(?:in|kan)?|save|simpan)\s+(?:spreadsheet|excel|data|file|csv|sheets?|rekap|laporan|catatan|transaksi)(?:\s+(?:spreadsheet|excel|data|file|csv|sheets?|ku|saya|gw|gue))?/i.test(lower) ||
-    /(?:spreadsheet|excel|sheets?)\s+(?:download|unduh|export|ekspor|ambil|kirim|minta)/i.test(lower) ||
+    /(?:download|unduh|export|ekspor|ambil|kirim|minta|buat(?:in|kan)?|save|simpan|buka|lihat|akses|open|link)\s+(?:spreadsheet|excel|data|file|csv|sheets?|rekap|laporan|catatan|transaksi)(?:\s+(?:spreadsheet|excel|data|file|csv|sheets?|ku|saya|gw|gue))?/i.test(lower) ||
+    /(?:spreadsheet|excel|sheets?)\s+(?:download|unduh|export|ekspor|ambil|kirim|minta|buka|lihat|akses|link)/i.test(lower) ||
+    /^(?:sheet|sheets|spreadsheet|excel|google\s+sheets)$/i.test(lower.trim()) ||
     /^(?:download|unduh|export|ekspor)\s*(?:spreadsheet|excel|data|file|csv|sheets?)?\s*$/i.test(lower.trim())
   ) {
     return {
@@ -964,11 +976,21 @@ export function parseMessage(
   // masuk 500k bonus
   // masuk 150rb freelance
   const incomeMatch = trimmed.match(
-    /^(?:(?:catat\s+)?(?:masuk|income|pemasukan|in|m)|catat\s+masuk)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
+    /^(?:(?:catat\s+)?(?:masuk|income|pemasukan|in|m)|catat\s+masuk)\s+(.+)$/i
   );
   if (incomeMatch) {
-    const amount = parseAmount(incomeMatch[1]);
-    const rest = (incomeMatch[2] || '').trim();
+    const incomeBody = incomeMatch[1].trim();
+    // Search the entire description for the monetary amount. Taking the first
+    // number mistakes a date such as "1 Oktober 2026" for Rp1.
+    const extractedAmount = extractExplicitAmount(incomeBody) || extractTransactionAmount(incomeBody);
+    const leadingAmountCandidate = incomeBody.match(/^(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+|$)/i);
+    const leadingAmountIsQty = leadingAmountCandidate && /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i.test(incomeBody.slice(leadingAmountCandidate[0].length).trim());
+    const leadingAmount = !dateContext && !leadingAmountIsQty ? leadingAmountCandidate : null;
+    const amountRaw = extractedAmount?.raw || leadingAmount?.[0];
+    const amount = amountRaw ? parseAmount(amountRaw) : null;
+    const rest = amountRaw
+      ? incomeBody.replace(amountRaw, ' ').replace(/\s+/g, ' ').trim()
+      : incomeBody;
     if (amount) {
       const qtyInfo = extractQty(rest);
       const hashtagMatch = rest.match(/#(\w+)/);
@@ -998,11 +1020,19 @@ export function parseMessage(
   // k 25k kopi susu
   // keluar 150rb belanja
   const expensePrefixMatch = trimmed.match(
-    /^(?:(?:catat\s+)?(?:keluar|expense|pengeluaran|out|k)|catat\s+keluar)\s+(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+(.*))?$/i
+    /^(?:(?:catat\s+)?(?:keluar|expense|pengeluaran|out|k)|catat\s+keluar)\s+(.+)$/i
   );
   if (expensePrefixMatch) {
-    const amount = parseAmount(expensePrefixMatch[1]);
-    const rest = (expensePrefixMatch[2] || '').trim();
+    const expenseBody = expensePrefixMatch[1].trim();
+    const extractedAmount = extractTransactionAmount(expenseBody);
+    const leadingAmountCandidate = expenseBody.match(/^(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+|$)/i);
+    const leadingAmountIsQty = leadingAmountCandidate && /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i.test(expenseBody.slice(leadingAmountCandidate[0].length).trim());
+    const leadingAmount = !dateContext && !leadingAmountIsQty ? leadingAmountCandidate : null;
+    const amountRaw = extractedAmount?.raw || leadingAmount?.[0];
+    const amount = amountRaw ? parseAmount(amountRaw) : null;
+    const rest = amountRaw
+      ? expenseBody.replace(amountRaw, ' ').replace(/\s+/g, ' ').trim()
+      : expenseBody;
     if (amount) {
       const qtyInfo = extractQty(rest);
       const hashtagMatch = rest.match(/#(\w+)/);
