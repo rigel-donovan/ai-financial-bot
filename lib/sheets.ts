@@ -328,6 +328,27 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     });
   }
 
+  // Earlier versions hid the canonical data tabs. Unhide them explicitly so
+  // the account filter-view link opens an editable source table for existing
+  // spreadsheets too (simply stopping the hide operation does not undo it).
+  const editableSourceIds = allSheets
+    .filter((sheet) => ['transactions', 'recurring_expenses'].includes(sheet.properties?.title || ''))
+    .map((sheet) => sheet.properties?.sheetId)
+    .filter((sourceId): sourceId is number => sourceId != null);
+  if (editableSourceIds.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: editableSourceIds.map((sourceId) => ({
+          updateSheetProperties: {
+            properties: { sheetId: sourceId, hidden: false },
+            fields: 'hidden'
+          }
+        }))
+      }
+    });
+  }
+
   const dashboard = dashboardGid == null ? baseUrl : `${baseUrl}#gid=${dashboardGid}`;
   return {
     dashboard,
