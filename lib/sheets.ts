@@ -107,7 +107,7 @@ export async function getUserTransactionsSpreadsheetUrl(userId: string): Promise
   });
   const transactionsSheet = spreadsheet.data.sheets?.find((sheet) => sheet.properties?.title === 'transactions');
   const gid = transactionsSheet?.properties?.sheetId;
-  if (gid === undefined) return baseUrl;
+  if (!transactionsSheet || gid === undefined) return baseUrl;
 
   const viewTitle = `Transactions for ${userId}`;
   let filterView = transactionsSheet.filterViews?.find((view) => view.title === viewTitle);
