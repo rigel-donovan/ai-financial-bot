@@ -1,5 +1,5 @@
 import { google } from 'googleapis';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Transaction, RecurringExpense, CategoryMapping } from '@/types';
 
 // In-memory fallback database for local development / testing without credentials
@@ -106,58 +106,12 @@ type UserSheetInfo = Array<{
   filterViews?: Array<{ filterViewId?: number | null; title?: string | null }> | null;
 }>;
 
-async function ensureUserFilterView(
-  sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string,
-  sheetMeta: UserSheetInfo,
-  userId: string,
-  sourceTitle: 'transactions' | 'recurring_expenses',
-  viewPrefix: 'Transactions' | 'Recurring'
-): Promise<{ sheetId: number; filterViewId: number } | undefined> {
-  const source = sheetMeta.find((sheet) => sheet.properties?.title === sourceTitle);
-  const sourceSheetId = source?.properties?.sheetId;
-  if (sourceSheetId == null) return undefined;
-
-  const title = `${viewPrefix} ${userSheetSuffix(userId)}`;
-  const existing = source?.filterViews?.find((view) => view.title === title);
-  const filter = {
-    title,
-    range: { sheetId: sourceSheetId },
-    criteria: {
-      1: {
-        condition: {
-          type: 'NUMBER_EQ',
-          values: [{ userEnteredValue: userId }]
-        }
-      }
-    }
-  };
-
-  if (existing?.filterViewId != null) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [{
-          updateFilterView: {
-            filter: { ...filter, filterViewId: existing.filterViewId },
-            fields: 'title,range,criteria'
-          }
-        }]
-      }
-    });
-    return { sheetId: sourceSheetId, filterViewId: existing.filterViewId };
-  }
-
-  const created = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: [{ addFilterView: { filter } }] }
-  });
-  const filterViewId = created.data.replies?.[0]?.addFilterView?.filter?.filterViewId;
-  return filterViewId == null ? undefined : { sheetId: sourceSheetId, filterViewId };
-}
-
 function userSheetSuffix(userId: string): string {
   return createHash('sha256').update(userId).digest('hex').slice(0, 12);
+}
+
+function userDataTabTitle(userId: string, prefix: 'Transactions' | 'Recurring'): string {
+  return `${prefix} ${userSheetSuffix(userId)}`;
 }
 
 async function ensureUserDashboardSheet(
@@ -263,27 +217,188 @@ async function ensureUserDataView(
 
   const viewSheetId = view.properties?.sheetId;
   if (viewSheetId == null) return undefined;
-  const escapedUserId = userId.replace(/"/g, '""');
-  if (isNewView) {
+
+  const firstCell = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${title}'!A2`,
+    valueRenderOption: 'FORMULA'
+  });
+  const firstValue = firstCell.data.values?.[0]?.[0];
+  const hasOldFormulaView = typeof firstValue === 'string' && firstValue.startsWith('=');
+  if (isNewView || hasOldFormulaView) {
+    const sourceValues = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sourceTitle}'!A2:${columnEnd}`
+    });
+    const filteredRows = (sourceValues.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
     await sheets.spreadsheets.values.clear({
       spreadsheetId,
       range: `'${title}'!A2:${columnEnd}`
     });
-  }
-  // Sheets may coerce numeric Telegram IDs into numbers when source rows
-  // are appended with USER_ENTERED. Compare as text so they still match.
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `'${title}'!A2`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [[`=IFERROR(FILTER('${sourceTitle}'!A2:${columnEnd},TO_TEXT('${sourceTitle}'!B2:B)="${escapedUserId}"),"")`]]
+    if (filteredRows.length > 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${title}'!A2`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: filteredRows }
+      });
     }
-  });
+  }
   return viewSheetId;
 }
 
-/** Prepare links to live, per-user dashboard and editable filter views. */
+function hasContent(row: any[]): boolean {
+  return row.some((cell) => cell !== undefined && cell !== null && String(cell).trim() !== '');
+}
+
+function normalizeUserTransactionRows(rows: any[][], userId: string): any[][] {
+  const now = new Date().toISOString();
+  return rows.filter(hasContent).flatMap((sourceRow) => {
+    const row = [...sourceRow];
+    const type = String(row[2] || '').trim().toLowerCase();
+    const amount = Number(String(row[3] || '').replace(/[^\d.-]/g, ''));
+    if (!['income', 'expense'].includes(type) || !Number.isFinite(amount) || amount <= 0) return [];
+    while (row.length < 10) row.push('');
+    row[0] = row[0] || randomUUID();
+    row[1] = userId;
+    row[2] = type;
+    row[3] = amount;
+    row[4] = row[4] || 'Lainnya';
+    row[7] = row[7] || 'manual';
+    row[8] = row[8] || now;
+    return [row.slice(0, 10)];
+  });
+}
+
+async function syncUserTransactionsToMaster(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  userId: string
+): Promise<boolean> {
+  const userTitle = userDataTabTitle(userId, 'Transactions');
+  const metadata = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(title))'
+  });
+  if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return false;
+
+  const [userData, masterData] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:J` }),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: 'transactions!A2:J' })
+  ]);
+  const userRows = normalizeUserTransactionRows(userData.data.values || [], userId);
+  const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
+  const mergedRows = [...otherUsers, ...userRows];
+
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:J` });
+  if (userRows.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${userTitle}'!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: userRows }
+    });
+  }
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: 'transactions!A2:J' });
+  if (mergedRows.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'transactions!A2',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: mergedRows }
+    });
+  }
+  return true;
+}
+
+function normalizeUserRecurringRows(rows: any[][], userId: string): any[][] {
+  const now = new Date().toISOString();
+  return rows.filter(hasContent).flatMap((sourceRow) => {
+    const row = [...sourceRow];
+    const amount = Number(String(row[3] || '').replace(/[^\d.-]/g, ''));
+    const dueDate = Number(row[5] || 1);
+    if (!row[2] || !Number.isFinite(amount) || amount <= 0) return [];
+    while (row.length < 9) row.push('');
+    row[0] = row[0] || randomUUID();
+    row[1] = userId;
+    row[3] = amount;
+    row[4] = row[4] || 'Lainnya';
+    row[5] = Number.isFinite(dueDate) ? Math.min(31, Math.max(1, dueDate)) : 1;
+    row[6] = String(row[6]).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+    row[8] = row[8] || now;
+    return [row.slice(0, 9)];
+  });
+}
+
+async function syncUserRecurringToMaster(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  userId: string
+): Promise<boolean> {
+  const userTitle = userDataTabTitle(userId, 'Recurring');
+  const metadata = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(title))'
+  });
+  if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return false;
+
+  const [userData, masterData] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:I` }),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: 'recurring_expenses!A2:I' })
+  ]);
+  const userRows = normalizeUserRecurringRows(userData.data.values || [], userId);
+  const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
+  const mergedRows = [...otherUsers, ...userRows];
+
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:I` });
+  if (userRows.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${userTitle}'!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: userRows }
+    });
+  }
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: 'recurring_expenses!A2:I' });
+  if (mergedRows.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'recurring_expenses!A2',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: mergedRows }
+    });
+  }
+  return true;
+}
+
+async function refreshUserDataTabFromMaster(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  userId: string,
+  sourceTitle: 'transactions' | 'recurring_expenses',
+  prefix: 'Transactions' | 'Recurring',
+  columnEnd: 'J' | 'I'
+): Promise<void> {
+  const userTitle = userDataTabTitle(userId, prefix);
+  const metadata = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(title))'
+  });
+  if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return;
+  const source = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${sourceTitle}'!A2:${columnEnd}` });
+  const userRows = (source.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:${columnEnd}` });
+  if (userRows.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${userTitle}'!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: userRows }
+    });
+  }
+}
+
+/** Prepare direct links to editable, per-user transaction and recurring tabs. */
 export async function getUserSpreadsheetLinks(userId: string): Promise<UserSpreadsheetLinks | null> {
   const client = getSheetsClient();
   if (!client) return null;
@@ -295,22 +410,20 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
   });
   const allSheets: UserSheetInfo = spreadsheet.data.sheets || [];
-  const transactionFilter = await ensureUserFilterView(
-    sheets, sheetId, allSheets, userId, 'transactions', 'Transactions'
+  const transactionGid = await ensureUserDataView(
+    sheets, sheetId, allSheets, userId, 'transactions', 'Transactions', 'J'
   );
-  const recurringFilter = await ensureUserFilterView(
-    sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring'
+  const recurringGid = await ensureUserDataView(
+    sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring', 'I'
   );
 
   let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
 
-  // Keep the old formula-only per-user copies and the shared template dashboard
-  // hidden. Filter views on the source tables let the user edit the same rows
-  // the bot reads, so those source tabs stay visible and canonical.
+  // Hide shared all-user source tabs; show the editable tabs for this account.
   const sourceSheetIds = allSheets
     .filter((sheet) => {
       const title = sheet.properties?.title || '';
-      return title === 'Dashboard' || /^Transactions [a-f0-9]{12}$/.test(title) || /^Recurring [a-f0-9]{12}$/.test(title);
+      return ['transactions', 'recurring_expenses', 'Dashboard'].includes(title);
     })
     .map((sheet) => sheet.properties?.sheetId)
     .filter((sourceId): sourceId is number => sourceId != null);
@@ -328,20 +441,15 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     });
   }
 
-  // Earlier versions hid the canonical data tabs. Unhide them explicitly so
-  // the account filter-view link opens an editable source table for existing
-  // spreadsheets too (simply stopping the hide operation does not undo it).
-  const editableSourceIds = allSheets
-    .filter((sheet) => ['transactions', 'recurring_expenses'].includes(sheet.properties?.title || ''))
-    .map((sheet) => sheet.properties?.sheetId)
-    .filter((sourceId): sourceId is number => sourceId != null);
-  if (editableSourceIds.length > 0) {
+  const userTabIds = [transactionGid, recurringGid, dashboardGid]
+    .filter((id): id is number => id != null);
+  if (userTabIds.length > 0) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: sheetId,
       requestBody: {
-        requests: editableSourceIds.map((sourceId) => ({
+        requests: userTabIds.map((id) => ({
           updateSheetProperties: {
-            properties: { sheetId: sourceId, hidden: false },
+            properties: { sheetId: id, hidden: false },
             fields: 'hidden'
           }
         }))
@@ -352,11 +460,11 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
   const dashboard = dashboardGid == null ? baseUrl : `${baseUrl}#gid=${dashboardGid}`;
   return {
     dashboard,
-    transactions: transactionFilter
-      ? `${baseUrl}#gid=${transactionFilter.sheetId}&fvid=${transactionFilter.filterViewId}`
+    transactions: transactionGid != null
+      ? `${baseUrl}#gid=${transactionGid}`
       : dashboard,
-    recurring: recurringFilter
-      ? `${baseUrl}#gid=${recurringFilter.sheetId}&fvid=${recurringFilter.filterViewId}`
+    recurring: recurringGid != null
+      ? `${baseUrl}#gid=${recurringGid}`
       : dashboard
   };
 }
@@ -546,6 +654,7 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
   }
 
   const { sheets, sheetId } = client;
+  if (tx.user_id) await syncUserTransactionsToMaster(sheets, sheetId, tx.user_id);
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
     range: 'transactions!A:J',
@@ -568,6 +677,9 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
       ]
     }
   });
+  if (tx.user_id) {
+    await refreshUserDataTabFromMaster(sheets, sheetId, tx.user_id, 'transactions', 'Transactions', 'J');
+  }
 }
 
 /**
@@ -584,6 +696,7 @@ export async function getAllTransactions(userId?: string): Promise<Transaction[]
 
   const { sheets, sheetId } = client;
   try {
+    if (userId) await syncUserTransactionsToMaster(sheets, sheetId, userId);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'transactions!A2:J'
@@ -673,6 +786,7 @@ export async function deleteTransaction(criteria?: {
 
   const { sheets, sheetId } = client;
   try {
+    if (targetUserId) await syncUserTransactionsToMaster(sheets, sheetId, targetUserId);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'transactions!A2:J'
@@ -775,6 +889,9 @@ export async function deleteTransaction(criteria?: {
       }
     }
 
+    if (targetUserId) {
+      await refreshUserDataTabFromMaster(sheets, sheetId, targetUserId, 'transactions', 'Transactions', 'J');
+    }
     return deleted;
   } catch (err) {
     console.error('Error deleting transaction:', err);
@@ -894,6 +1011,7 @@ export async function editTransaction(
 
   const { sheets, sheetId } = client;
   try {
+    if (targetUserId) await syncUserTransactionsToMaster(sheets, sheetId, targetUserId);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'transactions!A2:J'
@@ -1065,6 +1183,10 @@ export async function editTransaction(
       created_at: updatedCreatedAt
     };
 
+    if (targetUserId) {
+      await refreshUserDataTabFromMaster(sheets, sheetId, targetUserId, 'transactions', 'Transactions', 'J');
+    }
+
     return { previous, updated };
   } catch (err) {
     console.error('Error editing transaction:', err);
@@ -1096,6 +1218,7 @@ export async function getRecurringExpenses(userId?: string): Promise<RecurringEx
 
   const { sheets, sheetId } = client;
   try {
+    if (userId) await syncUserRecurringToMaster(sheets, sheetId, userId);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'recurring_expenses!A2:I'
@@ -1152,6 +1275,7 @@ export async function addRecurringExpense(item: RecurringExpense): Promise<void>
   }
 
   const { sheets, sheetId } = client;
+  if (item.user_id) await syncUserRecurringToMaster(sheets, sheetId, item.user_id);
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
     range: 'recurring_expenses!A:I',
@@ -1173,6 +1297,9 @@ export async function addRecurringExpense(item: RecurringExpense): Promise<void>
       ]
     }
   });
+  if (item.user_id) {
+    await refreshUserDataTabFromMaster(sheets, sheetId, item.user_id, 'recurring_expenses', 'Recurring', 'I');
+  }
 }
 
 /**
@@ -1193,6 +1320,7 @@ export async function toggleRecurringExpense(name: string, active: boolean, user
 
   const { sheets, sheetId } = client;
   try {
+    if (userId) await syncUserRecurringToMaster(sheets, sheetId, userId);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'recurring_expenses!A2:I'
@@ -1222,6 +1350,10 @@ export async function toggleRecurringExpense(name: string, active: boolean, user
       }
     });
 
+    if (userId) {
+      await refreshUserDataTabFromMaster(sheets, sheetId, userId, 'recurring_expenses', 'Recurring', 'I');
+    }
+
     return true;
   } catch (err) {
     console.error('Error updating recurring status:', err);
@@ -1242,6 +1374,12 @@ export async function updateRecurringLastRun(id: string, dateStr: string): Promi
 
   const { sheets, sheetId } = client;
   try {
+    const owner = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: 'recurring_expenses!A2:B'
+    });
+    const ownerId = owner.data.values?.find((row) => row[0] === id)?.[1];
+    if (ownerId) await syncUserRecurringToMaster(sheets, sheetId, String(ownerId));
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: 'recurring_expenses!A2:I'
@@ -1263,6 +1401,10 @@ export async function updateRecurringLastRun(id: string, dateStr: string): Promi
         values: [[dateStr]]
       }
     });
+    const userId = rows[index][1] ? String(rows[index][1]) : '';
+    if (userId) {
+      await refreshUserDataTabFromMaster(sheets, sheetId, userId, 'recurring_expenses', 'Recurring', 'I');
+    }
   } catch (err) {
     console.error('Error updating last run date:', err);
   }
