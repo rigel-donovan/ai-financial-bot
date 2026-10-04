@@ -201,12 +201,14 @@ async function ensureUserDataView(
       range: `'${title}'!A2:${columnEnd}`
     });
   }
+  // Sheets may coerce numeric Telegram IDs into numbers when source rows
+  // are appended with USER_ENTERED. Compare as text so they still match.
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `'${title}'!A2`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
-      values: [[`=IFERROR(FILTER('${sourceTitle}'!A2:${columnEnd},'${sourceTitle}'!B2:B="${escapedUserId}"),"")`]]
+      values: [[`=IFERROR(FILTER('${sourceTitle}'!A2:${columnEnd},TO_TEXT('${sourceTitle}'!B2:B)="${escapedUserId}"),"")`]]
     }
   });
   return viewSheetId;
