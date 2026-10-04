@@ -974,8 +974,8 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
   return {
     success: true,
     replyText: '📊 *Spreadsheet Keuangan Realtime*\n\n' +
-      'Buka spreadsheet akun Anda: ' + links.dashboard + '\n\n' +
-      'Tautan ini membuka Dashboard pribadi dengan tab transaksi dan pengeluaran rutin akun Anda. Perubahan dari chatbot akan diperbarui di spreadsheet ini.'
+      'Buka transaksi akun Anda: ' + links.transactions + '\n\n' +
+      'Daftar ini difilter ke user ID Telegram Anda dan bisa diedit langsung. Perubahan di sini akan dipakai bot saat membaca transaksi. Dashboard akun Anda juga tersedia di tab lain dalam spreadsheet yang sama.'
   };
 }
 

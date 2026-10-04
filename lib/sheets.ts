@@ -106,6 +106,56 @@ type UserSheetInfo = Array<{
   filterViews?: Array<{ filterViewId?: number | null; title?: string | null }> | null;
 }>;
 
+async function ensureUserFilterView(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheetMeta: UserSheetInfo,
+  userId: string,
+  sourceTitle: 'transactions' | 'recurring_expenses',
+  viewPrefix: 'Transactions' | 'Recurring'
+): Promise<{ sheetId: number; filterViewId: number } | undefined> {
+  const source = sheetMeta.find((sheet) => sheet.properties?.title === sourceTitle);
+  const sourceSheetId = source?.properties?.sheetId;
+  if (sourceSheetId == null) return undefined;
+
+  const title = `${viewPrefix} ${userSheetSuffix(userId)}`;
+  const existing = source?.filterViews?.find((view) => view.title === title);
+  const filter = {
+    title,
+    range: { sheetId: sourceSheetId },
+    criteria: {
+      1: {
+        condition: {
+          type: 'NUMBER_EQ',
+          values: [{ userEnteredValue: userId }]
+        }
+      }
+    }
+  };
+
+  if (existing?.filterViewId != null) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          updateFilterView: {
+            filter: { ...filter, filterViewId: existing.filterViewId },
+            fields: 'title,range,criteria'
+          }
+        }]
+      }
+    });
+    return { sheetId: sourceSheetId, filterViewId: existing.filterViewId };
+  }
+
+  const created = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{ addFilterView: { filter } }] }
+  });
+  const filterViewId = created.data.replies?.[0]?.addFilterView?.filter?.filterViewId;
+  return filterViewId == null ? undefined : { sheetId: sourceSheetId, filterViewId };
+}
+
 function userSheetSuffix(userId: string): string {
   return createHash('sha256').update(userId).digest('hex').slice(0, 12);
 }
@@ -245,20 +295,23 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     fields: 'sheets(properties(sheetId,title),filterViews(filterViewId,title))'
   });
   const allSheets: UserSheetInfo = spreadsheet.data.sheets || [];
-  const transactionGid = await ensureUserDataView(
-    sheets, sheetId, allSheets, userId, 'transactions', 'Transactions', 'J'
+  const transactionFilter = await ensureUserFilterView(
+    sheets, sheetId, allSheets, userId, 'transactions', 'Transactions'
   );
-  const recurringGid = await ensureUserDataView(
-    sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring', 'I'
+  const recurringFilter = await ensureUserFilterView(
+    sheets, sheetId, allSheets, userId, 'recurring_expenses', 'Recurring'
   );
 
   let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
-  if (dashboardGid == null) dashboardGid = transactionGid;
 
-  // Keep all-user source tabs out of the normal tab bar. The personalized
-  // copies remain formula-connected to these tabs and refresh with bot writes.
+  // Keep the old formula-only per-user copies and the shared template dashboard
+  // hidden. Filter views on the source tables let the user edit the same rows
+  // the bot reads, so those source tabs stay visible and canonical.
   const sourceSheetIds = allSheets
-    .filter((sheet) => ['transactions', 'recurring_expenses', 'Dashboard'].includes(sheet.properties?.title || ''))
+    .filter((sheet) => {
+      const title = sheet.properties?.title || '';
+      return title === 'Dashboard' || /^Transactions [a-f0-9]{12}$/.test(title) || /^Recurring [a-f0-9]{12}$/.test(title);
+    })
     .map((sheet) => sheet.properties?.sheetId)
     .filter((sourceId): sourceId is number => sourceId != null);
   if (sourceSheetIds.length > 0) {
@@ -275,15 +328,15 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
     });
   }
 
-  if (dashboardGid == null) return { dashboard: baseUrl, transactions: baseUrl, recurring: baseUrl };
+  const dashboard = dashboardGid == null ? baseUrl : `${baseUrl}#gid=${dashboardGid}`;
   return {
-    dashboard: `${baseUrl}#gid=${dashboardGid}`,
-    transactions: transactionGid == null
-      ? baseUrl
-      : `${baseUrl}#gid=${transactionGid}`,
-    recurring: recurringGid == null
-      ? baseUrl
-      : `${baseUrl}#gid=${recurringGid}`
+    dashboard,
+    transactions: transactionFilter
+      ? `${baseUrl}#gid=${transactionFilter.sheetId}&fvid=${transactionFilter.filterViewId}`
+      : dashboard,
+    recurring: recurringFilter
+      ? `${baseUrl}#gid=${recurringFilter.sheetId}&fvid=${recurringFilter.filterViewId}`
+      : dashboard
   };
 }
 
