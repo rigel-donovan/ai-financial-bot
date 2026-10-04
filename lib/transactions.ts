@@ -18,7 +18,6 @@ import {
   addRecurringExpense,
   toggleRecurringExpense,
   getCategoryMappings,
-  getUserTransactionsSpreadsheetUrl
 } from './sheets';
 import { generateFinancialAdvice } from './ai-advisor';
 
@@ -949,35 +948,6 @@ async function handleAiAdvice(userId?: string): Promise<ExecutionResult> {
 }
 
 async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResult> {
-  if (!userId) {
-    return {
-      success: false,
-      replyText: 'Spreadsheet tidak dapat dibuka karena identitas pengguna chat tidak tersedia.'
-    };
-  }
-
-  let spreadsheetUrl: string | null;
-  try {
-    spreadsheetUrl = await getUserTransactionsSpreadsheetUrl(userId);
-  } catch (error) {
-    console.error('[Transactions] Failed to prepare live spreadsheet link:', error);
-    spreadsheetUrl = null;
-  }
-
-  if (!spreadsheetUrl) {
-    return {
-      success: false,
-      replyText: 'Tautan Google Sheets belum tersedia. Pastikan Google Sheets dan kredensial Service Account sudah dikonfigurasi.'
-    };
-  }
-
-  return {
-    success: true,
-    replyText: `📊 *Spreadsheet Keuangan Realtime*\n\nBuka transaksi akun ini di Google Sheets:\n${spreadsheetUrl}\n\nTautan menampilkan transaksi dengan user ID Anda. Perubahan akan muncul di spreadsheet yang sama. Anda harus masuk ke akun Google yang memiliki akses ke dokumen.`
-  };
-}
-
-async function handleDownloadSpreadsheetLegacy(userId?: string): Promise<ExecutionResult> {
   if (!userId) {
     return {
       success: false,

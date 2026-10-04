@@ -18,12 +18,6 @@ export async function sendTelegramTextMessage({ chatId, text }: SendTelegramOpti
   }
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  // Telegram's legacy Markdown treats underscores as formatting markers, even
-  // inside a plain URL. Escape them only in URLs so spreadsheet IDs survive
-  // message rendering while the rest of the message keeps its formatting.
-  const markdownSafeText = text.replace(/https?:\/\/[^\s]+/g, (link) =>
-    link.replace(/_/g, '\\_')
-  );
 
   try {
     // Try sending with Markdown formatting first
@@ -32,7 +26,7 @@ export async function sendTelegramTextMessage({ chatId, text }: SendTelegramOpti
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text: markdownSafeText,
+        text,
         parse_mode: 'Markdown'
       })
     });
