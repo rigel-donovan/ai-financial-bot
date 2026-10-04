@@ -973,11 +973,9 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
 
   return {
     success: true,
-    replyText: '?? *Spreadsheet Keuangan Realtime*\n\n' +
-      'Dashboard akun Anda: ' + links.dashboard + '\n' +
-      'Data transaksi: ' + links.transactions + '\n' +
-      'Pengeluaran rutin: ' + links.recurring + '\n\n' +
-      'Perubahan transaksi dari chatbot akan langsung tercermin di spreadsheet yang sama. Gunakan tautan transaksi atau pengeluaran rutin untuk mengolah data akun Anda.'
+    replyText: '📊 *Spreadsheet Keuangan Realtime*\n\n' +
+      'Buka spreadsheet akun Anda: ' + links.dashboard + '\n\n' +
+      'Tautan ini membuka Dashboard pribadi dengan tab transaksi dan pengeluaran rutin akun Anda. Perubahan dari chatbot akan diperbarui di spreadsheet ini.'
   };
 }
 
