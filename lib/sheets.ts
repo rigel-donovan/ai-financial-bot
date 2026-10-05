@@ -218,13 +218,14 @@ async function ensureUserDataView(
   const viewSheetId = view.properties?.sheetId;
   if (viewSheetId == null) return undefined;
 
-  const firstCell = await sheets.spreadsheets.values.get({
+  const currentRows = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `'${title}'!A2`,
+    range: `'${title}'!A2:${columnEnd}`,
     valueRenderOption: 'FORMULA'
   });
-  const firstValue = firstCell.data.values?.[0]?.[0];
-  const hasOldFormulaView = typeof firstValue === 'string' && firstValue.startsWith('=');
+  const hasOldFormulaView = (currentRows.data.values || []).some((row) =>
+    row.some((cell) => typeof cell === 'string' && cell.startsWith('='))
+  );
   if (isNewView || hasOldFormulaView) {
     const sourceValues = await sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -249,6 +250,27 @@ async function ensureUserDataView(
 
 function hasContent(row: any[]): boolean {
   return row.some((cell) => cell !== undefined && cell !== null && String(cell).trim() !== '');
+}
+
+function hasFormula(rows: any[][]): boolean {
+  return rows.some((row) => row.some((cell) => typeof cell === 'string' && cell.startsWith('=')));
+}
+
+async function restoreUserTabFromMaster(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  title: string,
+  rows: any[][],
+  columnEnd: 'J' | 'I'
+): Promise<void> {
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${title}'!A2:${columnEnd}` });
+  if (!rows.length) return;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${title}'!A2`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: rows }
+  });
 }
 
 function normalizeUserTransactionRows(rows: any[][], userId: string): any[][] {
@@ -283,9 +305,14 @@ async function syncUserTransactionsToMaster(
   if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return false;
 
   const [userData, masterData] = await Promise.all([
-    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:J` }),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:J`, valueRenderOption: 'FORMULA' }),
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'transactions!A2:J' })
   ]);
+  if (hasFormula(userData.data.values || [])) {
+    const personalRows = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+    await restoreUserTabFromMaster(sheets, spreadsheetId, userTitle, personalRows, 'J');
+    return true;
+  }
   const userRows = normalizeUserTransactionRows(userData.data.values || [], userId);
   const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
   const mergedRows = [...otherUsers, ...userRows];
@@ -343,9 +370,14 @@ async function syncUserRecurringToMaster(
   if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return false;
 
   const [userData, masterData] = await Promise.all([
-    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:I` }),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: `'${userTitle}'!A2:I`, valueRenderOption: 'FORMULA' }),
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'recurring_expenses!A2:I' })
   ]);
+  if (hasFormula(userData.data.values || [])) {
+    const personalRows = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+    await restoreUserTabFromMaster(sheets, spreadsheetId, userTitle, personalRows, 'I');
+    return true;
+  }
   const userRows = normalizeUserRecurringRows(userData.data.values || [], userId);
   const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
   const mergedRows = [...otherUsers, ...userRows];
