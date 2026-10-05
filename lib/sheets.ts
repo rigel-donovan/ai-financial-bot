@@ -223,9 +223,7 @@ async function ensureUserDataView(
     range: `'${title}'!A2:${columnEnd}`,
     valueRenderOption: 'FORMULA'
   });
-  const hasOldFormulaView = (currentRows.data.values || []).some((row) =>
-    row.some((cell) => typeof cell === 'string' && cell.startsWith('='))
-  );
+  const hasOldFormulaView = hasFormula(currentRows.data.values || []);
   if (isNewView || hasOldFormulaView) {
     const sourceValues = await sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -253,7 +251,12 @@ function hasContent(row: any[]): boolean {
 }
 
 function hasFormula(rows: any[][]): boolean {
-  return rows.some((row) => row.some((cell) => typeof cell === 'string' && cell.startsWith('=')));
+  const formulaErrors = new Set(['#REF!', '#VALUE!', '#ARRAYFORMULA!']);
+  return rows.some((row) => row.some((cell) => {
+    if (typeof cell !== 'string') return false;
+    const value = cell.trim().toUpperCase();
+    return value.startsWith('=') || formulaErrors.has(value);
+  }));
 }
 
 async function restoreUserTabFromMaster(
