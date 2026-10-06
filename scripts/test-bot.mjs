@@ -1,6 +1,6 @@
-import { parseMessage, parseAmount, detectCategory, parseQueryDate } from '../lib/parser';
+import { parseMessage, parseAmount, detectCategory, parseQueryDate, isAnalysisRequest } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
-import { scanReceiptImage } from '../lib/receipt-scanner';
+import { scanReceiptImage, extractReceiptFromOcrText } from '../lib/receipt-scanner';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import ExcelJS from 'exceljs';
 import { buildSpreadsheet } from '../app/api/download-spreadsheet/route';
@@ -326,6 +326,80 @@ async function runTests() {
 
   console.log('✓ parseMessage passed!');
 
+  console.log('--- 3b. Testing Natural-Language Normalization (slang/typo/word numbers) ---');
+  const n1 = parseMessage('keluar 25rb gopud makan siang');
+  console.assert(n1.intent === 'RECORD_EXPENSE' && n1.amount === 25000 && n1.note === 'gopud makan siang', 'n1 failed: ' + JSON.stringify(n1));
+
+  const n2 = parseMessage('beliin kopi susu 15 ribu');
+  console.assert(n2.intent === 'RECORD_EXPENSE' && n2.amount === 15000 && n2.note === 'kopi susu', 'n2 failed: ' + JSON.stringify(n2));
+
+  const n3 = parseMessage('masuk seratus lima puluh ribu hasil jualan baju');
+  console.assert(n3.intent === 'RECORD_INCOME' && n3.amount === 150000, 'n3 failed (word numbers): ' + JSON.stringify(n3));
+
+  const n4 = parseMessage('keluar dua belas ribu buat parkir');
+  console.assert(n4.intent === 'RECORD_EXPENSE' && n4.amount === 12000, 'n4 failed (dua belas ribu): ' + JSON.stringify(n4));
+
+  const n5 = parseMessage('catat pengeluarann 50rb beli sabun');
+  console.assert(n5.intent === 'RECORD_EXPENSE' && n5.amount === 50000, 'n5 failed (typo pengeluarann): ' + JSON.stringify(n5));
+
+  const n6 = parseMessage('makan siang 45rb dan kopi susu 18rb');
+  console.assert(n6.intent === 'RECORD_EXPENSE', 'n6 multi-transaction should be handled upstream; here parsed as: ' + JSON.stringify(n6));
+  console.log('✓ Normalization tests passed!');
+
+  console.log('--- 3c. Testing Analysis Request Detection ---');
+  console.assert(isAnalysisRequest('rata-rata pengeluaran bulan ini'), 'analysis avg should be true');
+  console.assert(isAnalysisRequest('pengeluaran terbesar minggu ini'), 'analysis biggest should be true');
+  console.assert(isAnalysisRequest('bandingin pemasukan bulan ini sama bulan lalu'), 'analysis compare should be true');
+  console.assert(isAnalysisRequest('rekap bulan ini') === false, 'plain rekap should NOT be analysis');
+  console.log('✓ Analysis request detection passed!');
+
+  console.log('--- 3d. Testing OCR Receipt Text Extraction ---');
+  {
+    const ocrExtract = (text) => {
+      try { return extractReceiptFromOcrText(text); } catch { return { total_amount: 0 }; }
+    };
+
+    // Kasus lama: total eksplisit, subtotal, qty.
+    const pdam = ocrExtract('20/12/2019 17:40:37 (CU)\nSTRUK PEMBAYARAN TAGIHAN\nPDAM\nIDPEL : 13802\nNAMA : WINA HARTIKA\nTAGIHAN : RP. 85.100,00\nBIAYA ADM : RP. 2.500,00\nTOTAL BAYAR : RP. 87.600,00');
+    console.assert(pdam.total_amount === 87600 && pdam.merchant === 'PDAM', 'OCR PDAM failed: ' + JSON.stringify(pdam));
+
+    const gramedia = ocrExtract('Gramedia Bookstore\n1 Buku Tulis 15.000\n1 Pulpen Gel 10.000\nTOTAL ITEMS : 2\nTOTAL BAYAR : 25.000');
+    console.assert(gramedia.total_amount === 25000 && gramedia.qty === 2, 'OCR gramedia failed: ' + JSON.stringify(gramedia));
+
+    // "TOTAL ITEM/QTY: N" tidak boleh terbaca sebagai nominal total.
+    const qtyGuard = ocrExtract('TOKO BAJU\n2 Kemeja 75.000\nTOTAL ITEM : 2\nTOTAL BAYAR 75.000');
+    console.assert(qtyGuard.total_amount === 75000, 'OCR qty guard failed: ' + JSON.stringify(qtyGuard));
+
+    const qtyOnly = ocrExtract('TOKO\n1 Baju 120.000\nTOTAL QTY: 1');
+    console.assert(qtyOnly.total_amount === 0, 'OCR qty-only should fail: ' + JSON.stringify(qtyOnly));
+
+    // Nominal = uang diserahkan − kembalian, hanya bila tidak ada total eksplisit.
+    const tunaiKembali = ocrExtract('INDOMARET\n1 Susu 25.000\nTUNAI 50.000\nKEMBALI 25.000');
+    console.assert(tunaiKembali.total_amount === 25000, 'OCR tunai+kembali failed: ' + JSON.stringify(tunaiKembali));
+
+    const totalBeatsTendered = ocrExtract('ALFAMART\n2 Roti 18.000\nTOTAL BAYAR 18.000\nTUNAI 20.000\nKEMBALI 2.000');
+    console.assert(totalBeatsTendered.total_amount === 18000, 'OCR total beats tendered failed: ' + JSON.stringify(totalBeatsTendered));
+
+    // Nominal di baris berikutnya dari label.
+    const amountNextLine = ocrExtract('WARUNG\n2 Es Teh 6.000\nTOTAL BAYAR\nRp6.000');
+    console.assert(amountNextLine.total_amount === 6000, 'OCR amount next line failed: ' + JSON.stringify(amountNextLine));
+
+    // Merchant: alamat, NPWP, dan terima kasih tidak boleh jadi nama toko.
+    const merchantFilter = ocrExtract('Jl. Sudirman No. 12\nTERIMA KASIH\nKOPI KENANGAN\n1 Latte 32.000\nTOTAL 32.000');
+    console.assert(/KOPI KENANGAN/i.test(merchantFilter.merchant), 'OCR merchant filter failed: ' + JSON.stringify(merchantFilter));
+
+    const merchantNpwp = ocrExtract('NPWP 01.234.567.8-901.000\nTOKO ELEKTRONIK\n1 Kabel 45.000\nTOTAL 45.000');
+    console.assert(/TOKO ELEKTRONIK/i.test(merchantNpwp.merchant), 'OCR merchant NPWP failed: ' + JSON.stringify(merchantNpwp));
+
+    // Total tidak wajar dibanding penjumlahan item → peringatan.
+    const mismatch = ocrExtract('TOKO\n1 Baju 50.000\nTOTAL BAYAR 750.000');
+    console.assert(mismatch.warning && mismatch.warning.includes('perlu dicek'), 'OCR mismatch warning missing: ' + JSON.stringify(mismatch));
+
+    const consistent = ocrExtract('TOKO\n1 Baju 50.000\nTOTAL BAYAR 50.000');
+    console.assert(consistent.total_amount === 50000 && !consistent.warning, 'OCR consistent should have no warning: ' + JSON.stringify(consistent));
+    console.log('✓ OCR receipt extraction passed!');
+  }
+
   console.log('--- 4. Testing End-to-End Business Logic ---');
   const res1 = await handleUserMessage('keluar 25000 makan siang');
   console.assert(res1.success && res1.replyText.includes('Rp25.000'), 'res1 failed');
@@ -357,6 +431,41 @@ async function runTests() {
   const res7 = await handleUserMessage('hapus terakhir');
   console.assert(res7.success && res7.replyText.includes('Dibatalkan'), 'res7 failed');
   console.log('Delete last: OK');
+
+  console.log('--- 4b. Testing Conversation Memory (follow-up) ---');
+  const fu1 = await handleUserMessage('beli nasi goreng 25rb', 'user_followup');
+  console.assert(fu1.success && fu1.replyText.includes('Rp25.000'), 'fu1 failed: ' + fu1.replyText);
+
+  // "tambahin telur 5rb" sudah lengkap (nominal ada) sehingga dicatat normal.
+  const fu2 = await handleUserMessage('tambahin telur 5rb', 'user_followup');
+  console.assert(fu2.success && fu2.replyText.includes('Rp5.000'), 'fu2 failed: ' + fu2.replyText);
+
+  // Nominal saja setelah transaksi gagal tercatat (tanpa nominal) → lengkapi transaksi.
+  const fu3 = await handleUserMessage('gua keluar 25rb', 'user_followup2');
+  console.assert(fu3.success && fu3.replyText.includes('Rp25.000'), 'fu3 failed: ' + fu3.replyText);
+
+  // "hapus yang tadi" menghapus transaksi terakhir dari percakapan ini.
+  const fu5 = await handleUserMessage('hapus yang tadi', 'user_followup2');
+  console.assert(fu5.success && fu5.replyText.includes('Dibatalkan'), 'fu5 failed: ' + fu5.replyText);
+  console.log('Conversation memory: OK');
+
+  console.log('--- 4c. Testing Multi-Transaction Split ---');
+  const mt1 = await handleUserMessage('beli nasi 20rb dan kopi 15rb', 'user_multi');
+  console.assert(
+    mt1.success && mt1.replyText.includes('2 transaksi tercatat') && mt1.replyText.includes('Rp20.000') && mt1.replyText.includes('Rp15.000'),
+    'mt1 failed: ' + mt1.replyText
+  );
+
+  const mt2 = await handleUserMessage('keluar makan 30rb, ojek 12rb, parkir 5rb', 'user_multi');
+  console.assert(
+    mt2.success && mt2.replyText.includes('3 transaksi tercatat') && mt2.replyText.includes('Rp30.000'),
+    'mt2 failed: ' + mt2.replyText
+  );
+
+  // "list pemasukan dan pengeluaran" adalah SATU intent, bukan dipecah.
+  const mt3 = await handleUserMessage('list pemasukan dan pengeluaran', 'user_multi');
+  console.assert(mt3.success && !mt3.replyText.includes('transaksi tercatat dari satu pesan'), 'mt3 split wrongly: ' + mt3.replyText);
+  console.log('Multi-transaction: OK');
 
   const qtyIncome = await handleUserMessage('penjualan es teh manis 30 pcs sebesar 250k', 'user_qty_test');
   console.assert(

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+﻿import { GoogleGenerativeAI } from '@google/generative-ai';
 import { appendTransaction } from './sheets';
 import { detectCategory } from './parser';
 import { formatRp } from './transactions';
@@ -27,6 +27,57 @@ const MAX_GEMINI_ATTEMPTS_PER_MODEL = 2;
 const GEMINI_REQUEST_TIMEOUT_MS = 25_000;
 const OCR_SPACE_REQUEST_TIMEOUT_MS = 20_000;
 
+/**
+ * Jumlah nominal pada baris item yang formatnya tegas:
+ *   "<qty> <nama barang> <nominal>"  → "2 Kopi 50.000"
+ *
+ * Baris wajib diawali angka kuantitas agar metadata ("NAMA: BUDI", "IDPEL: 13802",
+ * "BIAYA ADM 2.500") tidak ikut terhitung. Tanpa syarat ini, peringatan
+ * mismatch akan muncul hampir di setiap struk sehingga tidak berguna.
+ */
+function sumItemLineAmounts(lines: string[]): number | undefined {
+  const metadata =
+    /\b(?:total|jumlah|bayar|pembayaran|tunai|cash|debit|credit|kembali|change|subtotal|ppn|pajak|npwp|diskon|discount|admin|terima\s+kasih|struk|receipt|invoice|faktur)\b/i;
+
+  const itemRow = /^\s*\d{1,4}\s*(?:[xX×]\s*)?[a-z].*?\d[\d.,]*\s*$/i;
+
+  let sum = 0;
+  let found = false;
+
+  for (const line of lines) {
+    if (metadata.test(line)) continue;
+    if (!itemRow.test(line)) continue;
+
+    const amount = extractAmountFromOcrLine(line);
+    if (amount > 0) {
+      sum += amount;
+      found = true;
+    }
+  }
+
+  if (!found) return undefined;
+  return sum;
+}
+
+/**
+ * Peringatkan bila total yang terbaca tidak masuk akal dibanding penjumlahan
+ * item.
+ *
+ * Total pada struk bisa lebih besar dari penjumlahan item (ada pajak, ongkir,
+ * biaya admin) tetapi tidak mungkin berbeda jauh. Ambang 40% dipakai agar
+ * selisih yang wajar tidak memicu peringatan, sementara nominal yang salah
+ * terbaca (mis. membaca "750.000" padahal total 50.000) tetap ditandai.
+ */
+function buildTotalMismatchWarning(total: number, itemSum?: number): string | undefined {
+  if (!itemSum || itemSum <= 0) return undefined;
+
+  const ratio = total / itemSum;
+  if (ratio >= 0.6 && ratio <= 1.4) return undefined;
+
+  const direction = total > itemSum ? 'lebih besar' : 'lebih kecil';
+  return `⚠️ Nominal total (${direction} dari penjumlahan rincian item) perlu dicek. Mohon pastikan angkanya benar, atau hapus catatan ini dengan "hapus terakhir".`;
+}
+
 interface ReceiptExtraction {
   total_amount: number;
   amountSource?: 'total' | 'subtotal' | 'item_sum';
@@ -35,6 +86,8 @@ interface ReceiptExtraction {
   items?: string;
   qty?: number;
   note?: string;
+  /** Peringatan kualitas ekstraksi, mis. total tidak cocok dengan rincian item. */
+  warning?: string;
 }
 
 function getGeminiErrorStatus(err: any): number | undefined {
@@ -71,47 +124,132 @@ function extractAmountFromOcrLine(line: string): number {
   return digits ? Number(digits) : 0;
 }
 
-function extractReceiptFromOcrText(text: string): ReceiptExtraction {
+/**
+ * Baris yang bukan nama toko: alamat, NPWP, nomor telepon, jam, tanggal,
+ * slogan, dan kalimat terima kasih. Baris seperti ini sering muncul di bagian
+ * atas struk dan sebelumnya sempat dianggap sebagai merchant.
+ */
+const notMerchantLine =
+  /^(?:terima\s+kasih|thank\s*you|www\.|https?:\/\/|jl\.?\s|jln\.?\s|jalan|no\.?\s*(?:telp|tel|hp)|telepon|tel\.?\s|npwp|np\.?\s|kasir|cashier|struk|receipt|invoice|faktur|nota|tanggal|date|waktu|time|jam|pax|meja|table|shift|kas|account|kartu)\b/i;
+
+/**
+ * Pilih baris yang paling mungkin berisi nama toko.
+ *
+ * Strategi: nama toko hampir selalu ada di bagian ATAS struk (header), jadi
+ * baris kandidat dicari dari atas, dan baris yang jelas-jelas bukan nama toko
+ * (alamat, NPWP, tanggal, jam, terima kasih, footer) dilewati.
+ */
+function findMerchant(lines: string[]): string {
+  const headerWindow = lines.slice(0, Math.max(8, Math.ceil(lines.length / 2)));
+
+  const isCandidate = (line: string): boolean => {
+    if (!line || line.length < 2 || line.length > 40) return false;
+    if (!/[a-z]/i.test(line)) return false;
+    // Terlalu banyak angka = metadata, bukan nama toko.
+    const digits = (line.match(/\d/g) || []).length;
+    if (digits > Math.max(2, Math.floor(line.length / 3))) return false;
+    if (notMerchantLine.test(line.trim())) return false;
+    if (/^(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}:\d{2})\b/.test(line.trim())) return false;
+    return true;
+  };
+
+  // Label yang bukan bagian dari nama merchant.
+  const metadataLabel =
+    /\b(?:total|jumlah|bayar|pembayaran|tagihan|biaya|idpel|nama|periode|pax|table|shift|kasir|cashier|item|subtotal|ppn|pajak|admin|diskon|kembali|change|tunai|cash|debit|credit)\b/i;
+
+  for (const line of headerWindow) {
+    const trimmed = line.trim();
+    if (!isCandidate(trimmed)) continue;
+    // Baris seperti "NAMA: BUDI" bukan merchant.
+    if (metadataLabel.test(trimmed) && /[:=]/.test(trimmed)) continue;
+    return trimmed;
+  }
+
+  return 'Toko/Merchant';
+}
+
+export function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
-  // Pola 1: Label total eksplisit (sangat luas)
-  const totalLabel = /\b(?:grand\s*)?total\b|\bjumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)?\b|\b(?:amount|balance)\s+due\b|\bnett?\b|\bbayar\b|\bpembayaran\b|\btunai\b|\bcash\b|\bcredit\b|\bdebit\b|\bcharge\b|\bfinal\s*(?:amount|total|price)\b|\bdpp\b|\btotal\s*(?:harga|belanja|bayar|transaksi|amount|due|price|payment|bill|net|nett)?\b/i;
   let total = 0;
   let amountSource: 'total' | 'subtotal' | 'item_sum' = 'total';
 
-  // Cari dari bawah ke atas untuk menemukan total yang paling relevan
-  for (let index = lines.length - 1; index >= 0; index--) {
-    if (!totalLabel.test(lines[index])) continue;
-    total = extractAmountFromOcrLine(lines[index]);
-    if (!total && lines[index + 1]) {
-      total = extractAmountFromOcrLine(lines[index + 1]);
+  /**
+   * Label yang menyatakan JUMLAH BARANG, bukan nominal uang.
+   * Baris seperti ini sering muncul di bagian bawah struk dan sebelumnya ikut
+   * terbaca sebagai total sehingga menghasilkan nominal salah (mis. "Total Qty: 1"
+   * dibaca jadi total Rp1).
+   */
+  const qtyLabel =
+    /\b(?:total\s*(?:item|items?|qty|barang|kuantitas|pcs|product)|jumlah\s*(?:item|barang|baris|produk)|item\s*count|qty)\b/i;
+
+  /**
+   * Prioritas label nominal, dari yang paling kuat:
+   *  1. TOTAL BAYAR / GRAND TOTAL / JUMLAH PEMBAYARAN → nilai final yang dicari
+   *  2. metode pembayaran (TUNAI/DEBIT/CREDIT) → uang diserahkan, perlu dikurangi kembalian
+   *  3. DPP/amount due → Basis pajak, bukan nominal akhir
+   */
+  const strongTotalLabel =
+    /\b(?:grand\s*total|total(?:\s*(?:akhir|keseluruhan|bayar|pembayaran|transaksi|tagihan|harga|amount|due|price|payment|bill))?|jumlah\s*(?:pembayaran|bayar|belanja|tagihan|akhir|keseluruhan)|(?:amount|balance)\s+due|total\s*due)\b/i;
+  const paymentLabel =
+    /\b(?:tunai|cash|debit|credit|kartu|transfer|trf|qris|shopeepay|ovo|dana|va)\b/i;
+  const changeLabel = /\b(?:kembali|kembalian|change|kembalian\s*uang)\b/i;
+
+  const weakTotalLabel =
+    /\b(?:dpp|nett?\b|bayar\b|pembayaran\b|charge|final\s*(?:amount|total|price))\b/i;
+
+  /** Ambil nominal dari sebuah baris, atau dari baris berikutnya bila kosong. */
+  const readAmountAt = (index: number): number => {
+    let amount = extractAmountFromOcrLine(lines[index]);
+    if (!amount && lines[index + 1]) amount = extractAmountFromOcrLine(lines[index + 1]);
+    return amount;
+  };
+
+  // Cari dari bawah ke atas: pada struk, nominal final berada di bagian bawah.
+  const findLastAmountByLabel = (label: RegExp, skipQty: boolean): number => {
+    for (let index = lines.length - 1; index >= 0; index--) {
+      if (skipQty && qtyLabel.test(lines[index])) continue;
+      if (!label.test(lines[index])) continue;
+      const amount = readAmountAt(index);
+      if (amount > 0) return amount;
     }
-    if (total > 0) break;
+    return 0;
+  };
+
+  // Prioritas 1: label total eksplisit.
+  total = findLastAmountByLabel(strongTotalLabel, true);
+
+  // Prioritas 2: metode pembayaran. Kalau ada baris kembalian, nominal yang
+  // dibayar = uang yang diserahkan - kembalian. Tanpa pengurangan ini, struk
+  // "TUNAI 50.000 / KEMBALI 25.000" akan tercatat Rp50.000 (harga sebenarnya 25.000).
+  if (total <= 0) {
+    const tendered = findLastAmountByLabel(paymentLabel, true);
+    if (tendered > 0) {
+      const change = findLastAmountByLabel(changeLabel, true);
+      const derived = change > 0 && change < tendered ? tendered - change : tendered;
+      total = derived;
+    }
   }
 
-  // Pola 2: Subtotal fallback
+  // Prioritas 3: label lemah (DPP, amount due, bayar).
   if (total <= 0) {
-    const subtotalLabel = /\bsub[\s-]?total\b/i;
-    for (let index = lines.length - 1; index >= 0; index--) {
-      if (!subtotalLabel.test(lines[index])) continue;
-      total = extractAmountFromOcrLine(lines[index]);
-      if (!total && lines[index + 1]) {
-        total = extractAmountFromOcrLine(lines[index + 1]);
-      }
-      if (total > 0) {
-        amountSource = 'subtotal';
-        break;
-      }
-    }
+    total = findLastAmountByLabel(weakTotalLabel, true);
+  }
+
+  // Prioritas 4: subtotal.
+  if (total <= 0) {
+    total = findLastAmountByLabel(/\bsub[\s-]?total\b/i, true);
+    if (total > 0) amountSource = 'subtotal';
   }
 
   // OCR tabel kadang memisahkan label Subtotal/Bayar dari nominal di kolom
   // kanan. Bila itu terjadi, jumlahkan nominal rupiah pada rincian produk.
   if (total <= 0) {
-    const summaryLabel = /\b(?:sub[\s-]?total|(?:grand\s*)?total|bayar|dibayar|payment|debit|credit|cash|kembali|change)\b/i;
+    const summaryLabel =
+      /\b(?:sub[\s-]?total|(?:grand\s*)?total|bayar|dibayar|payment|debit|credit|cash|kembali|change)\b/i;
     const itemAmounts: number[] = [];
 
     for (let index = 0; index < lines.length; index++) {
@@ -133,11 +271,21 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     throw new Error('OCR.Space tidak menemukan baris total pembayaran pada struk.');
   }
 
-  const merchant = lines.find((line) =>
-    /[a-z]/i.test(line) &&
-    !/^(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|struk|receipt|invoice|faktur|cash|tanggal|waktu|shift|no\.?\s*(?:trans|nota)|total|jumlah|bayar|pembayaran|tagihan|biaya|idpel|nama|periode|no\s*reff|pax|table)\b/i.test(line)
-  ) || 'Toko/Merchant';
+  const merchant = findMerchant(lines);
   const category = getOcrCategory(`${merchant}\n${text}`);
+
+  /**
+   * Jumlah nominal pada baris item (mis. "2 Kopi 25.000" → 25.000 per baris,
+   * lalu dijumlahkan bila formatnya per-item).
+   *
+   * Dipakai hanya sebagai pembanding untuk memberi peringatan bila total yang
+   * terbaca jauh berbeda dari penjumlahan item — pertanda ada baris yang salah
+   * dibaca, bukan untuk menimpa total yang sudah jelas.
+   */
+  const itemLineTotal = sumItemLineAmounts(lines);
+
+  const mismatchWarning = buildTotalMismatchWarning(total, itemLineTotal);
+
 
   // Ekstrak item-item belanja dari baris OCR
   // Item biasanya punya nama + harga di baris yang sama, dan bukan label total/subtotal/tax/dll
@@ -214,9 +362,34 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     }
   }
 
-  // Jika tidak ada baris ringkasan kuantitas, hitung dari jumlah item yang terbaca
+  /**
+   * Jumlahkan kuantitas dari baris item yang terbaca.
+   *
+   * Baris item berbentuk "5 Gula 35.000" atau "2 x Susu 12.000". Menjumlahkan
+   * angka di depan memberi kuantitas sebenarnya; memakai jumlah baris saja
+   * akan salah (baris "5 Gula" akan terhitung 1).
+   */
+  function sumItemQuantities(): number | undefined {
+    let sum = 0;
+    let found = false;
+
+    for (const line of lines) {
+      const match = line.match(/^\s*(\d{1,4})\s*(?:[xX×]\s*)?[a-z]/i);
+      if (!match) continue;
+      const q = parseInt(match[1], 10);
+      if (q > 0 && q <= 9999) {
+        sum += q;
+        found = true;
+      }
+    }
+
+    if (!found) return undefined;
+    return Math.min(sum, 9999);
+  }
+
+  // Jika tidak ada baris ringkasan kuantitas, hitung dari baris item.
   if (!detectedQty && itemLines.length > 0) {
-    detectedQty = itemLines.length;
+    detectedQty = sumItemQuantities() ?? itemLines.length;
   }
 
   return {
@@ -226,11 +399,36 @@ function extractReceiptFromOcrText(text: string): ReceiptExtraction {
     category,
     items,
     qty: detectedQty,
+    warning: mismatchWarning,
     note: items ? `${merchant} - ${items}` : `${merchant} (Scan Struk)`
   };
 }
 
-async function scanWithOcrSpace(imageBuffer: Buffer, mimeType: string): Promise<ReceiptExtraction> {
+/**
+ * Variabel OCR.Space.
+ *
+ * Engine yang berbeda sering kali membaca hal yang berbeda pada struk yang
+ * kurang tajam, jadi beberapa setting dicoba bergiliran sampai nominal
+ * ditemukan. Ini menaikkan peluang berhasil tanpa mengubah kode utama.
+ */
+interface OcrVariant {
+  engine: string;
+  isTable: string;
+  detectOrientation: string;
+  scale: string;
+}
+
+const OCR_VARIANTS: OcrVariant[] = [
+  { engine: '2', isTable: 'false', detectOrientation: 'false', scale: 'true' },
+  { engine: '1', isTable: 'true', detectOrientation: 'true', scale: 'true' },
+  { engine: '2', isTable: 'true', detectOrientation: 'false', scale: 'false' }
+];
+
+async function scanWithOcrSpace(
+  imageBuffer: Buffer,
+  mimeType: string,
+  variant: OcrVariant
+): Promise<ReceiptExtraction> {
   const apiKey = process.env.OCR_SPACE_API_KEY;
   if (!apiKey) throw new Error('OCR_SPACE_API_KEY belum diatur.');
 
@@ -243,8 +441,10 @@ async function scanWithOcrSpace(imageBuffer: Buffer, mimeType: string): Promise<
       base64Image: `data:${mimeType};base64,${imageBuffer.toString('base64')}`,
       language: 'eng',
       isOverlayRequired: 'false',
-      OCREngine: '2',
-      scale: 'true'
+      OCREngine: variant.engine,
+      isTable: variant.isTable,
+      detectOrientation: variant.detectOrientation,
+      scale: variant.scale
     });
     const response = await fetch('https://api.ocr.space/parse/image', {
       method: 'POST',
@@ -273,6 +473,79 @@ async function scanWithOcrSpace(imageBuffer: Buffer, mimeType: string): Promise<
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Coba OCR.Space dengan beberapa konfigurasi engine sampai nominal ditemukan.
+ * Kegagalan pada percobaan pertama (mis. baris total tidak terbaca) dicatat,
+ * lalu dicoba lagi dengan setting yang berbeda sebelum menyerah.
+ */
+async function scanWithOcrSpaceVariants(
+  imageBuffer: Buffer,
+  mimeType: string
+): Promise<ReceiptExtraction> {
+  let lastError: unknown;
+
+  for (let i = 0; i < OCR_VARIANTS.length; i++) {
+    const variant = OCR_VARIANTS[i];
+    try {
+      const result = await scanWithOcrSpace(imageBuffer, mimeType, variant);
+      if (i > 0) {
+        console.info(`[ReceiptScanner] Total terbaca pada percobaan OCR.Space ke-${i + 1} (engine ${variant.engine}).`);
+      }
+      return result;
+    } catch (err) {
+      lastError = err;
+      // Error kredensial/kuota tidak akan membaik dengan mengganti engine,
+      // jadi langsung hentikan percobaan.
+      const status = getGeminiErrorStatus(err);
+      if (status === 401 || status === 403 || status === 429) break;
+      console.warn(`[ReceiptScanner] OCR.Space engine ${variant.engine} gagal: ${(err as Error)?.message}`);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * Bersihkan dan parse output Gemini menjadi struktur struk.
+ *
+ * Model kadang membungkus JSON dengan markdown fence, menambah koma terakhir,
+ * atau menuliskan teks tambahan di sekitarnya. Semua itu dicoba diperbaiki
+ * lebih dulu supaya struk tetap terbaca, bukan langsung menyerah.
+ *
+ * Mengembalikan null bila tetap tidak bisa diparse.
+ */
+function parseExtractionJson(text: string): ReceiptExtraction | null {
+  if (!text) return null;
+
+  let candidate = text.trim();
+  if (candidate.startsWith('```')) {
+    candidate = candidate.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  }
+
+  // Model sering menambahkan kalimat sebelum/sesudah objek JSON.
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start >= 0 && end > start) candidate = candidate.slice(start, end + 1);
+
+  const attempts = [candidate, candidate.replace(/,\s*([}\]])/g, '$1')];
+
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt) as ReceiptExtraction;
+      const isReceiptShape =
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        ['total_amount', 'merchant', 'items', 'note', 'category'].some((key) => key in parsed);
+      if (isReceiptShape) return parsed;
+    } catch {
+      // Coba kandidat perbaikan berikutnya.
+    }
+  }
+
+  return null;
 }
 
 export async function scanReceiptImage(
@@ -376,7 +649,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
     ocrAttempted = true;
     try {
       console.info('[ReceiptScanner] Gemini Vision tidak tersedia atau gagal; beralih otomatis ke OCR.Space...');
-      extraction = await scanWithOcrSpace(imageBuffer, mimeType);
+      extraction = await scanWithOcrSpaceVariants(imageBuffer, mimeType);
       scanProvider = 'OCR.Space';
       console.info('[ReceiptScanner] Struk berhasil diproses menggunakan OCR.Space fallback.');
     } catch (ocrError: any) {
@@ -438,16 +711,34 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
   }
   if (rawJsonText) console.log('[ReceiptScanner] Gemini Vision Output:', rawJsonText);
 
-  try {
-    if (!extraction) {
-      // Clean potential markdown wrap
-      let cleanJson = rawJsonText;
-      if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-      }
-      extraction = JSON.parse(cleanJson) as ReceiptExtraction;
-    }
+  if (!extraction && rawJsonText) {
+    extraction = parseExtractionJson(rawJsonText) ?? undefined;
+  }
 
+  // Output Gemini bukan JSON valid → jangan langsung menyerah. Coba selamatkan
+  // lewat OCR.Space yang membaca teks struk, sehingga struk tetap tercatat.
+  if (!extraction && process.env.OCR_SPACE_API_KEY) {
+    try {
+      extraction = await scanWithOcrSpaceVariants(imageBuffer, mimeType);
+      scanProvider = 'OCR.Space';
+      ocrAttempted = true;
+      ocrFailure = undefined;
+      console.info('[ReceiptScanner] Output Gemini bukan JSON valid; memakai hasil OCR.Space sebagai cadangan.');
+    } catch (err) {
+      ocrAttempted = true;
+      ocrFailure = err;
+    }
+  }
+
+  if (!extraction) {
+    console.error('[ReceiptScanner] Failed to parse JSON response:', rawJsonText);
+    return {
+      success: false,
+      replyText: '⚠️ AI berhasil membaca gambar tetapi format struk tidak standar. Silakan catat langsung dengan chat seperti: "makan siang 25rb" atau "beli bensin 50k".'
+    };
+  }
+
+  try {
     const data = extraction;
     const amount = Number(data.total_amount) || 0;
 
@@ -501,6 +792,7 @@ Wajib balas HANYA dalam format JSON murni tanpa markdown codeblock dan tanpa tek
       (data.items ? `🛍️ *Item:* ${data.items}\n` : '') +
       (data.amountSource === 'subtotal' ? '⚠️ Total akhir tidak terlihat; nominal dicatat dari subtotal yang terbaca.\n' : '') +
       (data.amountSource === 'item_sum' ? '⚠️ Total dihitung dari nominal pada rincian item karena baris total tidak terbaca utuh.\n' : '') +
+      (data.warning ? data.warning + '\n' : '') +
       (ocrFailure && scanProvider === 'Gemini' ? '⚠️ OCR.Space tidak dapat memverifikasi nominal; periksa kembali jumlah transaksi.\n' : '') +
       `📅 *Tanggal transaksi:* ${transactionDateLabel}\n\n` +
       `✅ _Otomatis dicatat ke Google Sheets Anda!_\n_Atur tanggal lewat caption foto, misalnya: 26 September atau 23 Agustus 2025._`;

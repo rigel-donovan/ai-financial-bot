@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+﻿import crypto from 'crypto';
 import {
   Transaction,
   RecurringExpense,
@@ -7,6 +7,8 @@ import {
 } from '@/types';
 import { parseMessage, detectCategory } from './parser';
 import { parseNaturalLanguageWithAI } from './ai-nlu';
+import { parseMultiTransaction } from './multi-transaction';
+import { getContext, updateContext } from './conversation';
 import {
   appendTransaction,
   getAllTransactions,
@@ -244,12 +246,24 @@ export async function handleUserMessage(
   userId?: string
 ): Promise<ExecutionResult> {
   const categoryMap = await getCategoryMappings();
-  let parsed: ParsedIntent = parseMessage(rawText, categoryMap);
+  const context = getContext(userId);
+  let parsed: ParsedIntent = parseMessage(rawText, categoryMap, context);
 
-  // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali
+  // Multi-transaksi: satu pesan berisi beberapa catatan, mis.
+  // "makan 25k, bensin 50k, tol 7k".
+  // Dicoba sebelum AI karena lebih murah dan hasilnya deterministik.
+  const multiIntents = parseMultiTransaction(rawText, categoryMap);
+  if (multiIntents && multiIntents.length > 1) {
+    return await handleMultipleTransactions(multiIntents, userId);
+  }
+
+  // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali.
+  // Ini adalah jaring pengaman utama: whatever pun yang tidak dipahami rules
+  // diteruskan ke Gemini, dan Gemini tetap diarahkan pada konteks catatan
+  // keuangan (lihat prompt di lib/ai-nlu.ts).
   if (parsed.intent === 'UNKNOWN' && process.env.GEMINI_API_KEY) {
     try {
-      const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap);
+      const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap, context);
       if (aiParsed && aiParsed.intent !== 'UNKNOWN') {
         parsed = aiParsed;
       }
@@ -258,6 +272,74 @@ export async function handleUserMessage(
     }
   }
 
+  const result = await dispatchIntent(parsed, userId);
+
+  // Simpan konteks SESUDAH intent dijalankan, memakai hasil sebenarnya supaya
+  // commands yang gagal tidak ikut remembered.
+  rememberOutcome(userId, parsed, result);
+
+  return result;
+}
+
+/**
+ * Catat hasil percakapan ke memori sesi: transaksi terakhir, periode terakhir,
+ * dan transaksi yang belum lengkap (untuk lanjutan).
+ */
+function rememberOutcome(
+  userId: string | undefined,
+  parsed: ParsedIntent,
+  result: ExecutionResult
+): void {
+  const isReportIntent =
+    parsed.intent.startsWith('SUMMARY_') ||
+    parsed.intent === 'LIST_ALL' ||
+    parsed.intent === 'LIST_EXPENSES' ||
+    parsed.intent === 'LIST_INCOMES';
+
+  const isRecordIntent =
+    parsed.intent === 'RECORD_EXPENSE' || parsed.intent === 'RECORD_INCOME';
+
+  const update: Parameters<typeof updateContext>[2] = {};
+
+  if (isRecordIntent) {
+    update.transaction = {
+      type: parsed.intent === 'RECORD_EXPENSE' ? 'expense' : 'income',
+      amount: parsed.amount || 0,
+      note: parsed.note,
+      category: parsed.category,
+      date: parsed.targetDate
+    };
+  }
+
+  if (isReportIntent) {
+    update.period = {
+      period: parsed.period,
+      targetDate: parsed.targetDate,
+      startDate: parsed.startDate,
+      endDate: parsed.endDate,
+      displayDate: parsed.displayDate
+    };
+  }
+
+  if (parsed.category) update.category = parsed.category;
+
+  // Transaksi yang gagal dicatat karena nominal tidak terbaca → simpan sisa
+  // informasinya supaya user bisa melanjut dengan nominal saja ("25rb").
+  if (isRecordIntent && !result.success && !parsed.amount) {
+    update.pending = {
+      intent: parsed.intent === 'RECORD_EXPENSE' ? 'RECORD_EXPENSE' : 'RECORD_INCOME',
+      note: parsed.note,
+      category: parsed.category
+    };
+  }
+
+  updateContext(userId, parsed.intent, update);
+}
+
+/**
+ * Eksekusi intent yang sudah dipahami ke handler yang sesuai.
+ */
+async function dispatchIntent(parsed: ParsedIntent, userId?: string): Promise<ExecutionResult> {
   switch (parsed.intent) {
     case 'RECORD_EXPENSE':
       return await handleRecordExpense(parsed, userId);
@@ -293,7 +375,9 @@ export async function handleUserMessage(
       return await handleDownloadSpreadsheet(userId);
 
     case 'AI_ADVICE':
-      return await handleAiAdvice(userId);
+      // Kalau AI_ADVICE datang dari permintaan analisis, teruskan
+      // pertanyaan aslinya supaya AI menjawab dengan angka, bukan nasihat generik.
+      return await handleAiAdvice(userId, parsed.rawMessage, parsed.period);
 
     case 'ADD_RECURRING':
       return await handleAddRecurring(parsed, userId);
@@ -310,8 +394,77 @@ export async function handleUserMessage(
     case 'HELP':
     case 'UNKNOWN':
     default:
-      return handleHelp(rawText);
+      return handleHelp(parsed.rawMessage);
   }
+}
+
+/**
+ * Catat beberapa transaksi sekaligus dari satu pesan, lalu balas ringkasan
+ * gabungan agar user tidak perlu menunggu banyak pesan.
+ */
+async function handleMultipleTransactions(
+  intents: ParsedIntent[],
+  userId?: string
+): Promise<ExecutionResult> {
+  const lines: string[] = [];
+  let totalExpense = 0;
+  let totalIncome = 0;
+  let succeeded = 0;
+
+  for (const intent of intents) {
+    const result =
+      intent.intent === 'RECORD_EXPENSE'
+        ? await handleRecordExpense(intent, userId)
+        : await handleRecordIncome(intent, userId);
+
+    if (!result.success) {
+      // Bila ada bagian yang gagal, kembalikan pesan tsb agar user tahu bagian
+      // mana yang tidak tersimpan.
+      return {
+        success: false,
+        replyText: `⚠️ Sebagian catatan gagal disimpan.\n\n${result.replyText}\n\n_\nKetik ulang transaksi yang gagal, atau kirim sisanya satu per satu._`
+      };
+    }
+
+    succeeded++;
+
+    if (intent.intent === 'RECORD_EXPENSE') {
+      totalExpense += intent.amount || 0;
+      lines.push(`🔴 ${formatRp(intent.amount || 0)} — ${intent.note || 'Pengeluaran'}`);
+    } else {
+      totalIncome += intent.amount || 0;
+      lines.push(`🟢 ${formatRp(intent.amount || 0)} — ${intent.note || 'Pemasukan'}`);
+    }
+  }
+
+  // Perbarui konteks dengan transaksi terakhir yang tercatat.
+  const last = intents[intents.length - 1];
+  updateContext(userId, last.intent, {
+    transaction: {
+      type: last.intent === 'RECORD_EXPENSE' ? 'expense' : 'income',
+      amount: last.amount || 0,
+      note: last.note,
+      category: last.category,
+      date: last.targetDate
+    }
+  });
+
+  const summaryLines: string[] = [`📝 *${succeeded} transaksi tercatat dari satu pesan*`];
+  if (totalExpense > 0) summaryLines.push(`🔴 Total Pengeluaran: *${formatRp(totalExpense)}*`);
+  if (totalIncome > 0) summaryLines.push(`🟢 Total Pemasukan: *${formatRp(totalIncome)}*`);
+
+  const replyText = [
+    '✅ *Semua Transaksi Dicatat!*',
+    '',
+    ...summaryLines,
+    '',
+    '*Rincian:*',
+    ...lines,
+    '',
+    `_Ketik \`rekap hari ini\` untuk melihat ringkasannya._`
+  ].join('\n');
+
+  return { success: true, replyText };
 }
 
 /**
@@ -930,22 +1083,84 @@ function handleMenu(userId?: string): ExecutionResult {
 /**
  * Handle AI financial advice
  */
-async function handleAiAdvice(userId?: string): Promise<ExecutionResult> {
+/**
+ * Handle permintaan saran / analisis.
+ *
+ * `question` diisi ketika user menanyakan sesuatu yang spesifik (mis. "rata-rata
+ * pengeluaran bulan ini berapa?"), sehingga AI menjawab pertanyaan itu dengan
+ * angka milik user, bukan nasihat umum.
+ *
+ * `range` mengikuti periode dari pesan bila ada, default 30 hari terakhir.
+ */
+async function handleAiAdvice(
+  userId?: string,
+  question?: string,
+  period?: 'day' | 'week' | 'month' | 'year'
+): Promise<ExecutionResult> {
   const transactions = await getAllTransactions(userId);
-  // Filter last 30 days
-  const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const recent = transactions.filter(t => {
+  const filtered = question ? filterTransactionsForPeriod(transactions, period) : transactions;
+
+  if (!question) {
+    // Tanpa pertanyaan spesifik: pakai jendela 30 hari terakhir seperti
+    // sebelumnya.
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const recent = filtered.filter(t => {
+      try {
+        return new Date(t.created_at) >= thirtyDaysAgo;
+      } catch {
+        return true;
+      }
+    });
+    const replyText = await generateFinancialAdvice(recent, '30 Hari Terakhir');
+    return { success: true, replyText };
+  }
+
+  const periodLabel = describePeriod(period);
+  const replyText = await generateFinancialAdvice(filtered, periodLabel, question);
+  return { success: true, replyText };
+}
+
+/**
+ * Batasi transaksi ke periode tertentu. Tanpa periode eksplisit, seluruh
+ * transaksi dipakai agar AI tetap punya konteks yang cukup.
+ */
+function filterTransactionsForPeriod(
+  transactions: Transaction[],
+  period?: 'day' | 'week' | 'month' | 'year'
+): Transaction[] {
+  if (!period) return transactions;
+
+  const now = new Date();
+  let start: Date;
+
+  if (period === 'day') {
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  } else if (period === 'week') {
+    const day = now.getDay() || 7;
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+  } else if (period === 'year') {
+    start = new Date(now.getFullYear(), 0, 1);
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  return transactions.filter(t => {
     try {
-      return new Date(t.created_at) >= thirtyDaysAgo;
+      const d = new Date(t.created_at);
+      return d >= start && d <= now;
     } catch {
-      return true;
+      return false;
     }
   });
+}
 
-  const replyText = await generateFinancialAdvice(recent, '30 Hari Terakhir');
-  return { success: true, replyText };
+function describePeriod(period?: 'day' | 'week' | 'month' | 'year'): string {
+  if (period === 'day') return 'Hari Ini';
+  if (period === 'week') return 'Minggu Ini';
+  if (period === 'year') return `Tahun ${new Date().getFullYear()}`;
+  return 'Bulan Ini';
 }
 
 async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResult> {

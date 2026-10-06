@@ -24,7 +24,8 @@ function incrementRateLimit(): void {
  */
 export async function generateFinancialAdvice(
   transactions: Transaction[],
-  periodLabel: string = '30 Hari Terakhir'
+  periodLabel: string = '30 Hari Terakhir',
+  question?: string
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -76,22 +77,34 @@ export async function generateFinancialAdvice(
 
   const prompt = `
 Kamu adalah penasihat keuangan pribadi (AI Expense Advisor) yang ramah, santun, cerdas, dan to-the-point dalam Bahasa Indonesia.
-Berikut adalah data ringkasan pengeluaran pengguna selama ${periodLabel}:
+Berikut adalah data ringkasan keuangan pengguna selama ${periodLabel}:
 
 - Total Pemasukan: Rp${totalIncome.toLocaleString('id-ID')}
 - Total Pengeluaran: Rp${totalExpense.toLocaleString('id-ID')}
 - Selisih / Tabungan: Rp${(totalIncome - totalExpense).toLocaleString('id-ID')}
+- Jumlah Transaksi: ${transactions.length}
 - Pembagian Kategori:
 ${categoryBreakdownText}
 
 - Pengeluaran Terbesar:
 ${topItemsText}
 
+${question ? `PERMINTAAN PENGGUNA:
+"${question.replace(/"/g, "'")}"
+
 Tugasmu:
+1. Jawab pertanyaan pengguna secara LANGSUNG dengan memakai ANGKA dari data di atas.
+2. Kalau pertanyaannya soal rata-rata, hitung dari data: total pengeluaran / jumlah transaksi, atau total / jumlah hari sesuai makna kalimatnya.
+3. Kalau pertanyaannya soal "terbesar"/"terbanyak", sebutkan pos dan kategorinya beserta angkanya.
+4. Kalau pertanyaannya berupa perbandingan antar periode, jelaskan perbandingannya dan sebutkan bahwa data periode lain tidak tersedia bila memang tidak ada.
+5. Kalau datanya tidak cukup untuk menjawab, katakan terus terang apa yang tidak tersedia, lalu tanyakan periode atau kategori yang perlu diperjelas.
+6. Gunakan format WhatsApp (*bold* untuk penekanan, bullet point, tanpa tabel markdown). Maksimal 180 kata agar nyaman dibaca di chat HP.
+` : `Tugasmu:
 1. Berikan evaluasi singkat mengenai kondisi keuangan pengguna (1-2 kalimat).
 2. Sorot 1 atau 2 pos pengeluaran yang paling perlu diwaspadai / dihemat.
 3. Berikan 2 tips praktis yang bisa langsung diterapkan besok.
 4. Gunakan format WhatsApp (gunakan *bold* untuk penekanan dan bullet point, tanpa markdown tabel). Maksimal 150-200 kata agar nyaman dibaca di chat HP.
+`}
 `.trim();
 
   const candidateModels = [

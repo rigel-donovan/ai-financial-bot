@@ -1,4 +1,6 @@
 import { ParsedIntent } from '@/types';
+import { normalizeText, normalizeGentle } from './text-normalizer';
+import { ConversationContext } from './conversation';
 
 // Default keyword-to-category mapping
 export const DEFAULT_CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -427,6 +429,226 @@ function extractExplicitAmount(text: string): { amount: number; raw: string } | 
 }
 
 /**
+ * Istilah analisis/statistik yang TIDAK bisa dijawab oleh rekap biasa.
+ *
+ * "rekap bulan ini" dijawab handleSummary, tetapi "rata-rata pengeluaran bulan
+ * ini" atau "bandingkan minggu ini sama minggu lalu" memerlukan perhitungan
+ * khusus, sehingga ditangani sebagai AI_ADVICE yang menerima data transaksi.
+ */
+const ANALYSIS_PATTERNS: RegExp[] = [
+  /\brata[\s-]?rata\b/i,
+  /\bpaling\s+(?:besar|mahal|banyak|berat|tinggi|ramai)\b/i,
+  /\b(?:terbesar|termahal|terbanyak|terberat|tertinggi)\b/i,
+  /\bbandingkan\b|\bbandingin\b|\bperbandingan\b|\bcompare\b|\bcomparison\b|\bversus\b|\bvs\b/i,
+  /\bkategori\s+(?:apa|yg|yang)\b|\bkategori\s+terbanyak\b|\bkategori\s+terbesar\b/i,
+  /\bdistribusi\b|\bsebaran\b|\bproporsi\b|\bpersentase\b/i,
+  /\bkebanyakan\b/i
+];
+
+/** Kata kerja query yang menandakan user meminta laporan, bukan analisis. */
+const PLAIN_REPORT_KEYWORDS =
+  /\b(?:rekap|ringkasan|laporan|total|saldo|statistik|recap|summary)\b/i;
+
+/**
+ * Deteksi permintaan analisis.
+ *
+ * Syaratnya ada dua:
+ *  1. ada istilah analisis (rata-rata, terbesar, bandingkan, ...)
+ *  2. ada subjek keuangan (pengeluaran, transaksi, ...) agar kata "statistik"
+ *     dalam kalimat lain tidak ikut terseret.
+ */
+export function isAnalysisRequest(text: string): boolean {
+  const lower = (text || '').toLowerCase();
+  if (!lower) return false;
+  if (!ANALYSIS_PATTERNS.some((re) => re.test(lower))) return false;
+  return hasFinancialSubject(lower);
+}
+
+function hasFinancialSubject(lower: string): boolean {
+  return /\b(?:pengeluaran|pemasukan|transaksi|keuangan|uang|duit|dana|biaya|belanja|pendapatan|gaji|expense|income|bills?|tagihan)\b/i.test(lower);
+}
+
+/**
+ * Kata ganti & penunjuk yang merujuk ke percakapan sebelumnya.
+ *
+ * Tanpa konteks, "yang tadi", "terus bensin?", atau "berapa?" akan gagal
+ * dipahami karena tidak ada subjeknya.
+ */
+const BACKREFERENCE_WORDS =
+  /^(?:yang\s+(?:tadi|itu|ini|kemarin|terakhir|sebelumnya|baru)|terus\s+(?:gitu|ya|beli|beliin)|l lanjut(?:an)?|lanjutan|selanjutnya|terus|abis\s+itu|setelah\s+itu|kemudian|berikutnya|selain\s+itu|itunya|same\s+itu)\b/i;
+
+/** Kata tanya singkat yang bergantung penuh pada konteks sebelumnya. */
+const ELLIPTICAL_QUESTION =
+  /^(?:berapa(?:\s+dong)?|nanya\s+dong|sisa(?:nya)?\s+apa|sisa\s+apa|yang\s+mana|yg\s+mana|terus|next|lanjut|lanjutan|berikutnya|di\s*mana|dimana)\b/i;
+
+/**
+ * Penunjuk tanggal/periode eksplisit dalam pesan.
+ *
+ * Dipakai untuk mematikan aturan konteks "yang tadi": bila user menulis
+ * "hapus transaksi 27 september 2026", perintahnya sudah lengkap dan tidak
+ * boleh ditimpa dengan transaksi terakhir yang dikenang.
+ */
+const EXPLICIT_DATE_REF =
+  /(?:\b(?:tgl|tanggal)\b|\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today|minggu\s+(?:ini|lalu)|bulan\s+(?:ini|lalu)|tahun\s+(?:ini|lalu))\b|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?)/i;
+
+/**
+ * Coba memcascade perintah lanjutan memakai konteks percakapan.
+ *
+ * Mengembalikan null bila pesan ini bukan perintah lanjutan, sehingga caller
+ * lanjut ke parsing normal.
+ */
+function resolveFollowUp(
+  text: string,
+  lower: string,
+  context?: ConversationContext
+): ParsedIntent | null {
+  if (!context) return null;
+
+  // 1. Pesan singkat berisi nominal saja sementara ada transaksi yang belum
+  //    lengkap → lengkapi transaksi tersebut ("25rb" setelah "beli kopi").
+  if (context.pending && extractTransactionAmount(text)) {
+    const pending = context.pending;
+    const amount = extractTransactionAmount(text)?.amount;
+    if (!amount) return null;
+    return {
+      intent: pending.intent,
+      amount,
+      note: pending.note,
+      category: pending.category,
+      rawMessage: text
+    };
+  }
+
+  // 2. Pertanyaan elipsis yang merujuk periode terakhir:
+  //    "yang kemarin?", "periode tadi berapa?"
+  const isElliptical = ELLIPTICAL_QUESTION.test(lower) || BACKREFERENCE_WORDS.test(lower);
+  if (isElliptical && context.lastPeriod) {
+    const period = context.lastPeriod;
+
+    // Pertanyaan analisis tetap boleh ride along dari periode sebelumnya.
+    if (isAnalysisRequest(text)) {
+      return { intent: 'AI_ADVICE', rawMessage: text };
+    }
+
+    const wantsProfit = /\b(?:laba|profit|untung|keuntungan|bersih|selisih|net)\b/i.test(lower);
+    if (wantsProfit) {
+      return {
+        intent: 'SUMMARY_PROFIT',
+        period: period.period,
+        targetDate: period.targetDate,
+        startDate: period.startDate,
+        endDate: period.endDate,
+        displayDate: period.displayDate,
+        rawMessage: text
+      };
+    }
+
+    // Tanpa penyebut income/expense eksplisit, pakai intent terakhir.
+    const mentionsIncome = /\b(?:pemasukan|income|uang\s+masuk|pendapatan|gaji|masuk)\b/i.test(lower);
+    const mentionsExpense = /\b(?:pengeluaran|biaya|expense|uang\s+keluar|keluar|belanja)\b/i.test(lower);
+
+    let intent: ParsedIntent['intent'];
+    if (mentionsIncome && mentionsExpense) intent = 'LIST_ALL';
+    else if (mentionsIncome) intent = 'LIST_INCOMES';
+    else if (mentionsExpense) intent = 'LIST_EXPENSES';
+    else if (context.lastIntent === 'LIST_EXPENSES') intent = 'LIST_EXPENSES';
+    else if (context.lastIntent === 'LIST_INCOMES') intent = 'LIST_INCOMES';
+    else if (context.lastIntent === 'LIST_ALL') intent = 'LIST_ALL';
+    else intent = period.period === 'week' ? 'SUMMARY_WEEK' : period.period === 'year' ? 'SUMMARY_MONTH' : period.period === 'month' ? 'SUMMARY_MONTH' : 'SUMMARY_DAY';
+
+    return {
+      intent,
+      period: period.period,
+      targetDate: period.targetDate,
+      startDate: period.startDate,
+      endDate: period.endDate,
+      displayDate: period.displayDate,
+      rawMessage: text
+    };
+  }
+
+  // 3. Kategori yang disebutkan saat sebelumnya difilter:
+  //    "yang food aja?", "kategori transport?"
+  if (context.lastCategory && /^(?:yang\s+)?[a-z]{3,20}\s*(?:aja|saja)?$/i.test(lower)) {
+    const detected = detectCategory(lower, undefined);
+    if (detected !== 'Lainnya' && /\b(?:yang|kategori)\b/i.test(lower)) {
+      const wantsProfit = /\b(?:laba|profit|untung|bersih)\b/i.test(lower);
+      const wantsList = /\b(?:list|daftar|rincian|lihat|tampil|cek|yuh)\b/i.test(lower);
+      const period = context.lastPeriod;
+
+      if (wantsList) {
+        return {
+          intent: 'LIST_EXPENSES',
+          period: period?.period,
+          targetDate: period?.targetDate,
+          startDate: period?.startDate,
+          endDate: period?.endDate,
+          displayDate: period?.displayDate,
+          category: detected,
+          rawMessage: text
+        };
+      }
+
+      return {
+        intent: wantsProfit ? 'SUMMARY_PROFIT' : 'SUMMARY_MONTH',
+        period: period?.period,
+        targetDate: period?.targetDate,
+        startDate: period?.startDate,
+        endDate: period?.endDate,
+        displayDate: period?.displayDate,
+        category: detected,
+        rawMessage: text
+      };
+    }
+  }
+
+  // 4. "hapus yang tadi" / "hapus itu" → hapus transaksi terakhir yang dikenang.
+  //    Dilewati bila pesan sudah menyebut tanggal/periode sendiri, mis.
+  //    "hapus transaksi 27 september 2026" harus mengikuti tanggalnya,
+  //    bukan transaksi terakhir yang dikenang.
+  if (/\b(?:hapus|batal|batalin|undo|remove)\b/i.test(lower) &&
+      context.lastTransaction &&
+      !EXPLICIT_DATE_REF.test(lower)) {
+    return {
+      intent: 'DELETE_LAST',
+      amount: context.lastTransaction.amount,
+      note: context.lastTransaction.note,
+      targetDate: context.lastTransaction.date,
+      rawMessage: text
+    };
+  }
+
+  // 5. "yang tadi bukan 25k tapi 30k" → edit transaksi terakhir.
+  if (/\b(?:tadi|terakhir|itu|sebelumnya)\b/i.test(lower) &&
+      /\b(?:salah|edit|ubah|ganti|koreksi|bukan|tapi|harusnya|harusnya)\b/i.test(lower)) {
+    const amount = extractTransactionAmount(text)?.amount;
+    return {
+      intent: 'EDIT_LAST',
+      amount,
+      targetDate: context.lastTransaction?.date,
+      rawMessage: text
+    };
+  }
+
+  // 6. "berapa?" / "totalnya?" setelah mencatat transaksi → ringkas.
+  if (ELLIPTICAL_QUESTION.test(lower) && context.lastIntent &&
+      (context.lastIntent === 'RECORD_EXPENSE' || context.lastIntent === 'RECORD_INCOME')) {
+    return { intent: 'SUMMARY_DAY', period: 'day', rawMessage: text };
+  }
+
+  return null;
+}
+
+/**
+ * Deteksi perintah lanjutan yang memakai konteks. Dipakai juga oleh AI NLU
+ * sebagai sinyal apakah perlu mempertimbangkan percakapan sebelumnya.
+ */
+export function hasContextualReference(text: string): boolean {
+  const lower = (text || '').toLowerCase();
+  return ELLIPTICAL_QUESTION.test(lower) || BACKREFERENCE_WORDS.test(lower);
+}
+
+/**
  * Main intent parser
  */
 export function extractDateContextFromText(text: string): { targetDate?: string; startDate?: string; endDate?: string; displayDate?: string } | null {
@@ -494,10 +716,20 @@ function cleanTransactionNote(note: string): string {
 
 export function parseMessage(
   rawText: string,
-  customCategoryMap?: Record<string, string[]>
+  customCategoryMap?: Record<string, string[]>,
+  context?: ConversationContext
 ): ParsedIntent {
-  const trimmed = (rawText || '').trim();
+  // Pesan asli tetap disimpan untuk audit, tapi parsing memakai teks yang sudah
+  // dinormalisasi (slang, typo, angka terverbal, kata pengisi).
+  const originalText = (rawText || '').trim();
+  const normalized = normalizeText(originalText);
+  // Bila normalisasi membuat pesan kosong (mis. hanya emoji/filler), pakai
+  // teks asli agar intent lain tidak hilang tanpa sengaja.
+  const trimmed = normalized || originalText;
   const lower = trimmed.toLowerCase();
+
+  const followUp = resolveFollowUp(trimmed, lower, context);
+  if (followUp) return followUp;
 
   // Strip polite prefixes: "tolong buatin", "buatin", "minta", "tolong", etc.
   const cleanPrefix = lower
@@ -510,7 +742,7 @@ export function parseMessage(
   if (/^(?:menu|halo|hi|hai|hello|helo|hey|hei|yo|p|mulai|start|fitur|woi|bos|boss|bang|kak|gan|sis|mas|mba|mbak|assalamualaikum|assalamu'?alaikum|selamat\s+(?:pagi|siang|sore|malam)|hola|oi|bosku|gais|guys)$/i.test(lower)) {
     return {
       intent: 'MENU',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -518,7 +750,7 @@ export function parseMessage(
   if (/^(?:makasih|makasi|terima\s*kasih|thanks?|thank\s*you|thx|tq|ok(?:e|ay|eh|ey)?|sip|siap|mantap|noted|baik|good|bagus|keren|aman|nuhun|hatur\s+nuhun|iya|yoi|yoy|betul|bener|oke\s+(?:deh|sip|makasih|thanks)|nice|great|got\s*it|understood|paham|mengerti|ngerti)$/i.test(lower)) {
     return {
       intent: 'MENU',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -527,7 +759,7 @@ export function parseMessage(
   ) {
     return {
       intent: 'HELP',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -539,7 +771,7 @@ export function parseMessage(
   ) {
     return {
       intent: 'DOWNLOAD_SPREADSHEET',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -549,7 +781,7 @@ export function parseMessage(
   ) {
     return {
       intent: 'AI_ADVICE',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -606,7 +838,7 @@ export function parseMessage(
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         category: categoryHint,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -619,7 +851,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -631,7 +863,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -645,7 +877,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -660,7 +892,7 @@ export function parseMessage(
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
         category: categoryHint,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -674,7 +906,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
     if (dateInfo.period === 'month') {
@@ -685,7 +917,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
     if (dateInfo.period === 'year') {
@@ -696,7 +928,7 @@ export function parseMessage(
         startDate: dateInfo.startDate,
         endDate: dateInfo.endDate,
         displayDate: dateInfo.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -707,7 +939,7 @@ export function parseMessage(
       startDate: dateInfo.startDate,
       endDate: dateInfo.endDate,
       displayDate: dateInfo.displayDate,
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -748,7 +980,7 @@ export function parseMessage(
         note: cleanNote || undefined,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
   }
@@ -823,7 +1055,7 @@ export function parseMessage(
         startDate: dateInfo?.startDate,
         endDate: dateInfo?.endDate,
         displayDate: dateInfo?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -841,7 +1073,7 @@ export function parseMessage(
         intent: 'EDIT_LAST',
         amount,
         note: newNote || undefined,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -861,7 +1093,7 @@ export function parseMessage(
         note: newNote || undefined,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -869,7 +1101,7 @@ export function parseMessage(
       intent: 'EDIT_LAST',
       targetDate: dateContext?.targetDate,
       displayDate: dateContext?.displayDate,
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -883,7 +1115,7 @@ export function parseMessage(
   if (isListRecurring) {
     return {
       intent: 'LIST_RECURRING',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -897,7 +1129,7 @@ export function parseMessage(
     return {
       intent: 'DELETE_RECURRING',
       name,
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -909,7 +1141,7 @@ export function parseMessage(
   if (isHelpRecurring) {
     return {
       intent: 'HELP_RECURRING',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -957,7 +1189,7 @@ export function parseMessage(
               name,
               dueDate,
               category,
-              rawMessage: trimmed
+              rawMessage: originalText
             };
           }
         }
@@ -967,7 +1199,7 @@ export function parseMessage(
     // Jika user menulis "langganan ..." atau "tambah rutin ..." tapi tanggal atau nominal belum lengkap, tampilkan panduan format
     return {
       intent: 'HELP_RECURRING',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -1010,7 +1242,7 @@ export function parseMessage(
         category,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
   }
@@ -1053,7 +1285,7 @@ export function parseMessage(
         category,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
   }
@@ -1094,7 +1326,7 @@ export function parseMessage(
         category,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
   }
@@ -1107,7 +1339,7 @@ export function parseMessage(
   ) {
     return {
       intent: 'DELETE_LAST',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -1115,7 +1347,7 @@ export function parseMessage(
   if (/^(?:edit|ubah|ganti|koreksi|ralat|revisi)\b/i.test(trimmed) || /^(?:salah|bukan)\s+.*(?:harusnya|tapi)\s+/i.test(lower)) {
     return {
       intent: 'EDIT_LAST',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -1123,7 +1355,7 @@ export function parseMessage(
   if (isQueryOrReport) {
     return {
       intent: 'UNKNOWN',
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
@@ -1171,7 +1403,7 @@ export function parseMessage(
         category,
         targetDate: dateContext?.targetDate,
         displayDate: dateContext?.displayDate,
-        rawMessage: trimmed
+        rawMessage: originalText
       };
     }
 
@@ -1198,13 +1430,26 @@ export function parseMessage(
       category,
       targetDate: dateContext?.targetDate,
       displayDate: dateContext?.displayDate,
-      rawMessage: trimmed
+      rawMessage: originalText
     };
   }
 
-  // 14. Fallback / Unknown
+  // 14. Permintaan analisis statistik (rata-rata, terbesar, perbandingan, ...)
+  //
+  // Dicek SETELAH semua blok transaksi & query terlewat supaya "rata-rata"
+  // tidak capturing pesan biasa, dan tidak pernah sebelum blok recording
+  // supaya "makan 25rb" tidak salah dikira analisis.
+  if (isAnalysisRequest(trimmed)) {
+    return {
+      intent: 'AI_ADVICE',
+      period: parseQueryDate(trimmed).period,
+      rawMessage: originalText
+    };
+  }
+
+  // 15. Fallback / Unknown
   return {
     intent: 'UNKNOWN',
-    rawMessage: trimmed
+    rawMessage: originalText
   };
 }
