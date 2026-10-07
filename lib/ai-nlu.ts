@@ -156,6 +156,13 @@ EDIT RULES:
 - target_query = kata unik untuk mencari transaksi target. Kosong jika target = transaksi terakhir.
 - "salah harusnya 35k" = edit nominal terakhir jadi 35000
 - "ubah kategori bensin jadi Transport" = edit target "bensin", category "Transport"
+- Jika user menyebut transaksi lama dan tanggal, ambil hanya deskripsi transaksi LAMA sebagai target_query; jangan masukkan tanggal, kata "hari ini/kemarin", kata kerja "beli/bayar", jenis transaksi, atau frasa setelah "jadi/menjadi/ganti dengan".
+- Bagian setelah "jadi/menjadi/ganti dengan" adalah nilai baru (note/category/amount), bukan target pencarian.
+- Pahami variasi: "edit pengeluaran beli nasi padang hari ini jadi beli udang keju + nasi 16k" berarti target_query "nasi padang", note baru "udang keju + nasi", amount 16000, target_date hari ini.
+- "ubah transaksi nasi padang tanggal 7 oktober jadi ayam geprek 19rb" berarti target_query "nasi padang", note baru "ayam geprek", amount 19000, target_date tanggal 7 Oktober.
+- "ganti catatan kopi kemarin menjadi latte" berarti target_query "kopi", note baru "latte", target_date kemarin.
+- "edit pengeluaran hari ini jadi 20rb" tidak menyebut transaksi tertentu: target_query kosong dan edit transaksi terakhir yang cocok pada hari ini.
+- Variasi kata "ubah", "ganti", "koreksi", "ralat", "revisi", "yang salah", "harusnya", "maksudku", dan "bukan ... tapi ..." dapat menandakan koreksi transaksi lama. Jangan catat koreksi sebagai transaksi baru.
 
 Tanggal hari ini: ${todayStr}
 Kategori tersedia: ${categoryGuide}
@@ -377,7 +384,13 @@ Other (bukan keuangan):
 
       if (parsed.type === 'edit') {
         const amount = Number(parsed.amount) || undefined;
-        const note = typeof parsed.note === 'string' ? parsed.note.trim() || undefined : undefined;
+        const note = typeof parsed.note === 'string'
+          ? parsed.note
+              .trim()
+              .replace(/^(?:beli|membeli|order|pesan|bayar|catat(?:kan)?)\s+/i, '')
+              .replace(/\s+/g, ' ')
+              .trim() || undefined
+          : undefined;
         const category = typeof parsed.category === 'string'
           ? detectCategory(parsed.category, parsed.category, customCategoryMap)
           : undefined;
@@ -386,7 +399,12 @@ Other (bukan keuangan):
           amount,
           note,
           category,
-          name: typeof parsed.target_query === 'string' ? parsed.target_query.trim() || undefined : undefined,
+          name: typeof parsed.target_query === 'string'
+            ? parsed.target_query
+                .replace(/\b(?:hari\s+ini|kemarin|today|yesterday|pengeluaran|pemasukan|transaksi|beli|membeli|bayar|tanggal|tgl)\b/gi, ' ')
+                .replace(/\s+/g, ' ')
+                .trim() || undefined
+            : undefined,
           targetDate,
           startDate,
           endDate,

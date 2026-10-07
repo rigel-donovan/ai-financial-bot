@@ -250,6 +250,38 @@ function hasContent(row: any[]): boolean {
   return row.some((cell) => cell !== undefined && cell !== null && String(cell).trim() !== '');
 }
 
+// Match edit/delete descriptions against transaction notes without requiring
+// the user to repeat filler words such as "beli", "pengeluaran", or dates.
+const TRANSACTION_QUERY_STOP_WORDS = new Set([
+  'edit', 'ubah', 'ganti', 'koreksi', 'ralat', 'revisi', 'pengeluaran', 'pemasukan',
+  'transaksi', 'catatan', 'nominal', 'jumlah', 'beli', 'membeli', 'bayar', 'bayarannya',
+  'jadi', 'menjadi', 'yang', 'untuk', 'pada', 'tanggal', 'tgl', 'hari', 'ini', 'today',
+  'kemarin', 'tadi', 'barusan', 'terakhir', 'sebelumnya', 'tolong', 'dong', 'ya', 'ke',
+  'dari', 'dan', 'atau', 'saja', 'aja', 'sebesar', 'senilai', 'seharga', 'rp', 'idr'
+]);
+
+function transactionQueryTokens(value: string): string[] {
+  return (value || '')
+    .toLocaleLowerCase('id-ID')
+    .replace(/\b(?:\d{1,2}\s+)?(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|mei|jun|jul|ags|agu|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?\b/gi, ' ')
+    .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, ' ')
+    .replace(/\b\d{4}\b/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 1 && !TRANSACTION_QUERY_STOP_WORDS.has(word));
+}
+
+function transactionMatchesQuery(query: string | undefined, ...values: Array<string | undefined>): boolean {
+  if (!query?.trim()) return true;
+  const queryTokens = [...new Set(transactionQueryTokens(query))];
+  if (!queryTokens.length) return false;
+  const text = transactionQueryTokens(values.filter(Boolean).join(' '));
+  const hits = queryTokens.filter((word) => text.includes(word)).length;
+  // Require the bulk of meaningful query words; a single generic overlap
+  // should never select an unrelated transaction.
+  return hits > 0 && hits / queryTokens.length >= (queryTokens.length === 1 ? 1 : 0.6);
+}
+
 function hasFormula(rows: any[][]): boolean {
   const formulaErrors = new Set(['#REF!', '#VALUE!', '#ARRAYFORMULA!']);
   return rows.some((row) => row.some((cell) => {
@@ -977,13 +1009,7 @@ export async function editTransaction(
     if (mockStore.transactions.length === 0) return null;
     let targetIdx = -1;
     const matchesQuery = (tx: Transaction, query?: string) => {
-      if (!query) return true;
-      const q = query.toLowerCase();
-      return (
-        tx.note.toLowerCase().includes(q) ||
-        tx.category.toLowerCase().includes(q) ||
-        tx.raw_message.toLowerCase().includes(q)
-      );
+      return transactionMatchesQuery(query, tx.note, tx.category, tx.raw_message);
     };
 
     const candidates = mockStore.transactions.filter((tx) => {
@@ -1072,9 +1098,9 @@ export async function editTransaction(
         if (opts.targetDate && !matchesTargetDate(rowCreatedAt, opts.targetDate)) return false;
 
         if (opts.criteria?.query) {
-          const q = opts.criteria.query.toLowerCase();
-          const text = (is9Col ? `${row[4]} ${row[5]} ${row[6]}` : `${row[3]} ${row[4]} ${row[5]}`).toLowerCase();
-          return text.includes(q);
+          return is9Col
+            ? transactionMatchesQuery(opts.criteria.query, row[4], row[5], row[6])
+            : transactionMatchesQuery(opts.criteria.query, row[3], row[4], row[5]);
         }
 
         return true;
@@ -1111,9 +1137,10 @@ export async function editTransaction(
         }
 
         if (opts.criteria?.query) {
-          const q = opts.criteria.query.toLowerCase();
-          const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
-          if (text.includes(q)) {
+          const matches = is9Col
+            ? transactionMatchesQuery(opts.criteria.query, r[4], r[5], r[6])
+            : transactionMatchesQuery(opts.criteria.query, r[3], r[4], r[5]);
+          if (matches) {
             targetIdx = i;
             break;
           }

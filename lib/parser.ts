@@ -1019,6 +1019,11 @@ export function parseMessage(
       if (amtMatch) {
         newNote = replacementContent.replace(amtMatch[0], '').replace(/\s+/g, ' ').trim();
       }
+      newNote = newNote
+        .replace(/^(?:beli|membeli|order|pesan|bayar|catat(?:kan)?)\s+/i, '')
+        .replace(/\b(?:sebesar|senilai|seharga|totalnya|nominalnya)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (newDate && !amtMatch && !noteClause) {
         newNote = '';
       }
@@ -1040,7 +1045,12 @@ export function parseMessage(
 
       const targetQuery = targetPart
         .replace(AMOUNT_REGEX, '')
-        .replace(/\b(?:kategori|category|pengeluaran|terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi)\b/gi, '')
+        .replace(/\b(?:kategori|category|pengeluaran|pemasukan|terakhir|transaksi|nominal|catatan|keterangan|yang tadi|tadi|beli|membeli|bayar|tolong|dong|hari ini|today|kemarin|sebelumnya|barusan)\b/gi, '')
+        .replace(/\b(?:tgl|tanggal)?\s*\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?\b/gi, '')
+        .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, '')
+        .replace(/\b\d{4}\b/g, '')
+        .replace(/[+,:;]+/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
 
       const dateInfo = extractDateContextFromText(targetPart) || (newDate ? undefined : dateContext);
