@@ -153,6 +153,34 @@ async function runTests() {
   const p33 = parseMessage('edit pengeluaran PERTAMINA ke tanggal 27 september 2026');
   console.assert(p33.intent === 'EDIT_LAST' && p33.name === 'PERTAMINA' && p33.newDate === '2026-09-27' && !p33.amount && !p33.note, 'p33 failed: ' + JSON.stringify(p33));
 
+  // Broad natural-language edit/report coverage: old target, new value, and date must stay separate.
+  const editNatural1 = parseMessage('edit pengeluaran beli nasi padang hari ini jadi beli udang keju + nasi 16k');
+  console.assert(editNatural1.intent === 'EDIT_LAST' && editNatural1.name === 'nasi padang' && editNatural1.note === 'udang keju + nasi' && editNatural1.amount === 16000 && editNatural1.targetDate, 'editNatural1 failed: ' + JSON.stringify(editNatural1));
+
+  const editNatural2 = parseMessage('edit pengeluaran beli udang keju + nasi hari ini jadi beli nasi ayam geprek 19k');
+  console.assert(editNatural2.intent === 'EDIT_LAST' && editNatural2.name === 'udang keju nasi' && editNatural2.note === 'nasi ayam geprek' && editNatural2.amount === 19000 && editNatural2.targetDate, 'editNatural2 failed: ' + JSON.stringify(editNatural2));
+
+  const editNatural3 = parseMessage('ubah pengeluaran nasi padang tanggal 7 oktober 2026 jadi nasi ayam geprek 19rb');
+  console.assert(editNatural3.intent === 'EDIT_LAST' && editNatural3.name === 'nasi padang' && editNatural3.note === 'nasi ayam geprek' && editNatural3.amount === 19000 && editNatural3.targetDate === '2026-10-07', 'editNatural3 failed: ' + JSON.stringify(editNatural3));
+
+  const editNatural4 = parseMessage('ganti catatan kopi kemarin menjadi latte');
+  console.assert(editNatural4.intent === 'EDIT_LAST' && editNatural4.name === 'kopi' && editNatural4.note === 'latte' && editNatural4.targetDate, 'editNatural4 failed: ' + JSON.stringify(editNatural4));
+
+  const editNatural5 = parseMessage('edit kategori pengeluaran bensin kemarin jadi Bills');
+  console.assert(editNatural5.intent === 'EDIT_LAST' && editNatural5.name === 'bensin' && editNatural5.category === 'Bills' && editNatural5.targetDate, 'editNatural5 failed: ' + JSON.stringify(editNatural5));
+
+  const monthOnlyExpenses = parseMessage('pengeluaran bulan september');
+  console.assert(monthOnlyExpenses.intent === 'LIST_EXPENSES' && monthOnlyExpenses.period === 'month' && monthOnlyExpenses.startDate, 'monthOnlyExpenses failed: ' + JSON.stringify(monthOnlyExpenses));
+
+  const terseYearIncome = parseMessage('pemasukan 2025');
+  console.assert(terseYearIncome.intent === 'LIST_INCOMES' && terseYearIncome.period === 'year' && terseYearIncome.startDate, 'terseYearIncome failed: ' + JSON.stringify(terseYearIncome));
+
+  const allTransactionsYear = parseMessage('semua transaksi 2026');
+  console.assert(allTransactionsYear.intent === 'LIST_ALL' && allTransactionsYear.period === 'year' && allTransactionsYear.startDate, 'allTransactionsYear failed: ' + JSON.stringify(allTransactionsYear));
+
+  const datedBuy = parseMessage('7 oktober 2026 beli nasi padang 25rb');
+  console.assert(datedBuy.intent === 'RECORD_EXPENSE' && datedBuy.note === 'nasi padang' && datedBuy.targetDate === '2026-10-07', 'datedBuy failed: ' + JSON.stringify(datedBuy));
+
   const p34 = parseQueryDate('struk tanggal 27 september 2026');
   console.assert(p34 && p34.targetDate === '2026-09-27', 'p34 failed: ' + JSON.stringify(p34));
 

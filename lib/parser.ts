@@ -337,9 +337,9 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
     }
   }
 
-  const yearOnlyMatch = lower.match(/\b(?:tahun|thn|year)\s*(\d{4})\b/i);
+  const yearOnlyMatch = lower.match(/\b(?:tahun|thn|year)\s*(\d{4})\b|\b(20\d{2})\b/i);
   if (yearOnlyMatch) {
-    const year = parseInt(yearOnlyMatch[1], 10);
+    const year = parseInt(yearOnlyMatch[1] || yearOnlyMatch[2], 10);
     const start = new Date(year, 0, 1, 0, 0, 0);
     const end = new Date(year, 11, 31, 23, 59, 59, 999);
     return {
@@ -705,6 +705,7 @@ function cleanTransactionNote(note: string): string {
   const datePhrase = /\b(?:(?:buat|untuk|pada|tanggal|tgl|di)\s+)*(?:kemarin(?:\s+lusa)?|hari\s+ini|today|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/gi;
   return note
     .replace(datePhrase, ' ')
+    .replace(/^\s*(?:catat\s+)?(?:beli|membeli|order|pesan|bayar)\s+/i, ' ')
     // Hapus kata penghubung sebelum atau sesudah nominal: "sebesar", "senilai", "seharga", "dengan harga", "totalnya", "harganya", "sejumlah", "total", "nominal"
     .replace(/\b(?:sebesar|senilai|seharga|sejumlah|dengan\s+(?:harga|total|nominal)|harga(?:nya)?|total(?:nya)?|nominal(?:nya)?|(?:dengan|dgn)\s+harga)\b/gi, ' ')
     .replace(/\b(?:buat|untuk|pada|tanggal|tgl|di)\s*$/i, '')
@@ -801,8 +802,9 @@ export function parseMessage(
     !isRecurringWord && (
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|recap|ringkasan|riwayat|history|summary|report|stats|statistik|total|saldo|catatan|data|transaksi)\b/i.test(cleanPrefix) ||
       /^(?:list|daftar|rincian|tampilkan|tampilin|lihat|cek|berapa|laporan|rekap|recap|ringkasan|riwayat|history|summary|report|stats|statistik|total|saldo)\b/i.test(lower) ||
+      /\b(?:semua|seluruh|riwayat|daftar|list|tampilkan|lihat|cek)\s+(?:transaksi|catatan|pemasukan|pengeluaran|expenses?|incomes?)\b/i.test(lower) ||
       /\b(?:habis berapa|sisa saldo|saldo sekarang|pengeluaran tanggal|pemasukan tanggal)\b/i.test(lower) ||
-      /^(?:pengeluaran|biaya|pemasukan|expenses?|incomes?|pendapatan|belanja)\s*(?:hari(?:\s+ini)?|today|minggu(?:\s+ini)?|week|bulan(?:\s+ini)?|month|kemarin)?(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
+      /^(?:pengeluaran|biaya|pemasukan|expenses?|incomes?|pendapatan|belanja|uang\s+(?:masuk|keluar))\s*(?:(?:hari(?:\s+ini)?|today|kemarin|minggu(?:\s+(?:ini|lalu))?|week|bulan(?:\s+(?:ini|lalu|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec))?|month|tahun(?:\s+\d{4})?|thn\s+\d{4}|\d{4}|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?)?(?:\s+(?:list|daftar|rincian|semua))?$/i.test(lower) ||
       /\b(?:laba|profit|keuntungan|untung|saldo\s+bersih|margin|net(?:to)?)\b/i.test(lower) ||
       isNetCalculationRequest ||
       /\b(?:uang(?:ku|\s+(?:saya|gw|gue|gua|aku))?|duit(?:ku)?|dana(?:ku)?)\s*(?:berapa|sisa|tersisa|masih|ada|tinggal)/i.test(lower) ||
