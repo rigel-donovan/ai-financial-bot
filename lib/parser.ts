@@ -261,7 +261,7 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
   }
 
   // 5. "27 september 2026" / "tanggal 27 sep 2026" / "27 september"
-  const wordDateMatch = lower.match(/(?:\b(?:tgl|tanggal)\s+)?(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?\b/i);
+  const wordDateMatch = lower.match(/(?:\b(?:tgl|tanggal)\s+)?(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+(\d{4}))?\b/i);
   if (wordDateMatch) {
     const day = parseInt(wordDateMatch[1], 10);
     const monthStr = wordDateMatch[2].toLowerCase();
@@ -969,6 +969,8 @@ export function parseMessage(
         .replace(/\b(?:tgl|tanggal)\s*\d{1,2}\b/gi, '')
         .replace(/\b\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec)(?:\s+\d{4})?\b/gi, '')
         .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, '')
+        .replace(/\b20\d{2}\b/g, '')
+        .replace(/\b(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec|sebesar|senilai|seharga|totalnya|nominalnya)\b/gi, '')
         .replace(/\b(?:kemarin(?:\s+lusa)?|hari\s+ini|today)\b/gi, '')
         .replace(/\s+/g, ' ')
         .trim();

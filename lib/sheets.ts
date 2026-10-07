@@ -257,7 +257,9 @@ const TRANSACTION_QUERY_STOP_WORDS = new Set([
   'transaksi', 'catatan', 'nominal', 'jumlah', 'beli', 'membeli', 'bayar', 'bayarannya',
   'jadi', 'menjadi', 'yang', 'untuk', 'pada', 'tanggal', 'tgl', 'hari', 'ini', 'today',
   'kemarin', 'tadi', 'barusan', 'terakhir', 'sebelumnya', 'tolong', 'dong', 'ya', 'ke',
-  'dari', 'dan', 'atau', 'saja', 'aja', 'sebesar', 'senilai', 'seharga', 'rp', 'idr'
+  'dari', 'dan', 'atau', 'saja', 'aja', 'sebesar', 'senilai', 'seharga', 'totalnya', 'nominalnya', 'rp', 'idr',
+  'januari', 'februari', 'maret', 'april', 'mei', 'juni', 'juli', 'agustus', 'september', 'oktober', 'november', 'desember',
+  'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'ags', 'aug', 'sep', 'sept', 'okt', 'oct', 'nov', 'des', 'dec'
 ]);
 
 function transactionQueryTokens(value: string): string[] {
@@ -274,7 +276,10 @@ function transactionQueryTokens(value: string): string[] {
 function transactionMatchesQuery(query: string | undefined, ...values: Array<string | undefined>): boolean {
   if (!query?.trim()) return true;
   const queryTokens = [...new Set(transactionQueryTokens(query))];
-  if (!queryTokens.length) return false;
+  // Generic context labels (for example, a remembered transaction named
+  // "Pengeluaran") carry no searchable item name; rely on the caller's user,
+  // date, and amount filters instead of turning a valid undo into a miss.
+  if (!queryTokens.length) return true;
   const text = transactionQueryTokens(values.filter(Boolean).join(' '));
   const hits = queryTokens.filter((word) => text.includes(word)).length;
   // Require the bulk of meaningful query words; a single generic overlap
@@ -841,15 +846,17 @@ export async function deleteTransaction(criteria?: {
       if (!criteria || (!criteria.amount && !criteria.query)) {
         return mockStore.transactions.splice(i, 1)[0];
       }
-      const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
-      const text = `${tx.category} ${tx.note} ${tx.raw_message}`.toLowerCase();
+      const queryMatches = transactionMatchesQuery(criteria.query, tx.category, tx.note, tx.raw_message);
+      const amountMatches = criteria.amount !== undefined && (
+        tx.amount === criteria.amount || (!!criteria.query && Math.abs(tx.amount - criteria.amount) <= Math.max(1000, criteria.amount * 0.01))
+      );
       if (criteria.amount && criteria.query) {
-        if (tx.amount === criteria.amount && words.some(w => text.includes(w))) {
+        if (amountMatches && queryMatches) {
           return mockStore.transactions.splice(i, 1)[0];
         }
-      } else if (criteria.amount && tx.amount === criteria.amount) {
+      } else if (criteria.amount && (tx.amount === criteria.amount || (!!criteria.query && amountMatches))) {
         return mockStore.transactions.splice(i, 1)[0];
-      } else if (criteria.query && words.some(w => text.includes(w))) {
+      } else if (criteria.query && queryMatches) {
         return mockStore.transactions.splice(i, 1)[0];
       }
     }
@@ -878,7 +885,12 @@ export async function deleteTransaction(criteria?: {
       }
 
       const rAmount = parseInt((is9Col ? r[3] : r[2] || '0').toString().replace(/[^\d]/g, ''), 10);
-      const text = (is9Col ? `${r[4]} ${r[5]} ${r[6]}` : `${r[3]} ${r[4]} ${r[5]}`).toLowerCase();
+      const queryMatches = is9Col
+        ? transactionMatchesQuery(criteria?.query, r[4], r[5], r[6])
+        : transactionMatchesQuery(criteria?.query, r[3], r[4], r[5]);
+      const amountMatches = criteria?.amount !== undefined && (
+        rAmount === criteria.amount || (!!criteria.query && Math.abs(rAmount - criteria.amount) <= Math.max(1000, criteria.amount * 0.01))
+      );
       const rowCreatedAt = (is9Col ? r[8] : r[7]) || '';
 
       if (criteria?.targetDate && !matchesTargetDate(rowCreatedAt, criteria.targetDate)) {
@@ -886,16 +898,15 @@ export async function deleteTransaction(criteria?: {
       }
 
       if (criteria && (criteria.amount || criteria.query)) {
-        const words = criteria.query ? criteria.query.toLowerCase().split(/\s+/).filter(w => w.length > 2) : [];
         if (criteria.amount && criteria.query) {
-          if (rAmount === criteria.amount && words.some(w => text.includes(w))) {
+          if (amountMatches && queryMatches) {
             targetIdx = i;
             break;
           }
         } else if (criteria.amount && rAmount === criteria.amount) {
           targetIdx = i;
           break;
-        } else if (criteria.query && words.some(w => text.includes(w))) {
+        } else if (criteria.query && queryMatches) {
           targetIdx = i;
           break;
         }

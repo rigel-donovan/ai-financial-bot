@@ -43,6 +43,12 @@ async function runTests() {
   const p4b = parseMessage('hapus transaksi 27 september 2026');
   console.assert(p4b.intent === 'DELETE_LAST' && p4b.targetDate === '2026-09-27' && !p4b.amount && !p4b.note, 'p4b failed: ' + JSON.stringify(p4b));
 
+  const deleteSpecificApprox = parseMessage('hapus pengeluaran first media sebesar 450k tanggal 28 september');
+  console.assert(deleteSpecificApprox.intent === 'DELETE_LAST' && deleteSpecificApprox.note === 'first media' && deleteSpecificApprox.amount === 450000 && deleteSpecificApprox.targetDate === '2026-09-28', 'deleteSpecificApprox failed: ' + JSON.stringify(deleteSpecificApprox));
+
+  const deleteSpecificExact = parseMessage('hapus pengeluaran first media sebesar 450.660 tanggal 28 september 2026');
+  console.assert(deleteSpecificExact.intent === 'DELETE_LAST' && deleteSpecificExact.note === 'first media' && deleteSpecificExact.amount === 450660 && deleteSpecificExact.targetDate === '2026-09-28', 'deleteSpecificExact failed: ' + JSON.stringify(deleteSpecificExact));
+
   const p5 = parseMessage('edit terakhir 30000');
   console.assert(p5.intent === 'EDIT_LAST' && p5.amount === 30000, 'p5 failed');
 
@@ -567,6 +573,13 @@ async function runTests() {
   const deleteOutput = await handleUserMessage('hapus transaksi 27 september 2026', 'user_output_delete');
   console.assert(deleteOutput.success && deleteOutput.replyText.includes('27 September 2026'), 'historical delete output missing date label: ' + deleteOutput.replyText);
   console.log('Historical delete output with date label: OK');
+
+  const specificDeleteUser = 'user_specific_delete_qa';
+  const specificDeleteSetup = await handleUserMessage('pengeluaran first media 450660 tanggal 28 september 2026', specificDeleteUser);
+  console.assert(specificDeleteSetup.success, 'specific delete setup failed: ' + specificDeleteSetup.replyText);
+  const specificDelete = await handleUserMessage('hapus pengeluaran first media sebesar 450k tanggal 28 september', specificDeleteUser);
+  console.assert(specificDelete.success && specificDelete.replyText.includes('Rp450.660'), 'specific approximate delete failed: ' + specificDelete.replyText);
+  console.log('Delete by description, approximate amount, and explicit date: OK');
 
   const historicalEditOutput = await handleUserMessage('27 september 2026 masuk 200000 freelance', 'user_output_edit');
   console.assert(historicalEditOutput.success, 'historical edit setup failed: ' + historicalEditOutput.replyText);
