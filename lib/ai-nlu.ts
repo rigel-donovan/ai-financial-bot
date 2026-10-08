@@ -157,6 +157,7 @@ EDIT RULES:
 - "salah harusnya 35k" = edit nominal terakhir jadi 35000
 - "ubah kategori bensin jadi Transport" = edit target "bensin", category "Transport"
 - Jika user menyebut transaksi lama dan tanggal, ambil hanya deskripsi transaksi LAMA sebagai target_query; jangan masukkan tanggal, kata "hari ini/kemarin", kata kerja "beli/bayar", jenis transaksi, atau frasa setelah "jadi/menjadi/ganti dengan".
+- Pahami rentang bulan sebagai seluruh periode dari awal bulan pertama sampai akhir bulan kedua. Contoh "list transaksi bulan september - oktober 2026" = list_all, period month, start_date 2026-09-01, end_date 2026-10-31; "pengeluaran dari November 2025 sampai Februari 2026" = list_expenses untuk seluruh rentang lintas tahun.
 - Bagian setelah "jadi/menjadi/ganti dengan" adalah nilai baru (note/category/amount), bukan target pencarian.
 - Pahami variasi: "edit pengeluaran beli nasi padang hari ini jadi beli udang keju + nasi 16k" berarti target_query "nasi padang", note baru "udang keju + nasi", amount 16000, target_date hari ini.
 - "ubah transaksi nasi padang tanggal 7 oktober jadi ayam geprek 19rb" berarti target_query "nasi padang", note baru "ayam geprek", amount 19000, target_date tanggal 7 Oktober.

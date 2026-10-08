@@ -86,6 +86,15 @@ async function runTests() {
   const p14b = parseMessage('list pemasukan dan pengeluaran 27 - 28 september');
   console.assert(p14b.intent === 'LIST_ALL' && p14b.startDate === '2026-09-27' && p14b.endDate === '2026-09-28', 'p14b failed: ' + JSON.stringify(p14b));
 
+  const monthRangeAll = parseMessage('list transaksi bulan september - oktober 2026');
+  console.assert(monthRangeAll.intent === 'LIST_ALL' && monthRangeAll.period === 'month' && monthRangeAll.startDate === '2026-09-01' && monthRangeAll.endDate === '2026-10-31', 'monthRangeAll failed: ' + JSON.stringify(monthRangeAll));
+
+  const monthRangeExpense = parseMessage('lihat pengeluaran dari september sampai oktober 2026');
+  console.assert(monthRangeExpense.intent === 'LIST_EXPENSES' && monthRangeExpense.startDate === '2026-09-01' && monthRangeExpense.endDate === '2026-10-31', 'monthRangeExpense failed: ' + JSON.stringify(monthRangeExpense));
+
+  const monthRangeCrossYear = parseMessage('rekap pemasukan November 2025 sampai Februari 2026');
+  console.assert(monthRangeCrossYear.intent === 'LIST_INCOMES' && monthRangeCrossYear.startDate === '2025-11-01' && monthRangeCrossYear.endDate === '2026-02-28', 'monthRangeCrossYear failed: ' + JSON.stringify(monthRangeCrossYear));
+
   const p14c = parseMessage('list pemasukan dan pengeluaran bulan ini');
   console.assert(p14c.intent === 'LIST_ALL' && p14c.period === 'month' && p14c.startDate && p14c.endDate, 'p14c failed: ' + JSON.stringify(p14c));
 
@@ -539,6 +548,15 @@ async function runTests() {
   const rangeList = await handleUserMessage('list pemasukan dan pengeluaran 27 - 28 september', 'user_range');
   console.assert(rangeList.success && rangeList.replyText.includes('27 September 2026') && rangeList.replyText.includes('Rp45.000') && rangeList.replyText.includes('Rp30.000'), 'range list failed: ' + rangeList.replyText);
   console.log('Date range list: OK');
+
+  const monthRangeUser = 'user_month_range_qa';
+  await handleUserMessage('1 september 2026 beli kopi 10rb', monthRangeUser);
+  await handleUserMessage('1 oktober 2026 bonus 20rb', monthRangeUser);
+  await handleUserMessage('1 agustus 2026 beli bensin 30rb', monthRangeUser);
+  await handleUserMessage('1 november 2026 bonus 40rb', monthRangeUser);
+  const monthRangeReport = await handleUserMessage('list transaksi bulan september - oktober 2026', monthRangeUser);
+  console.assert(monthRangeReport.success && monthRangeReport.replyText.includes('Rp10.000') && monthRangeReport.replyText.includes('Rp20.000') && !monthRangeReport.replyText.includes('Rp30.000') && !monthRangeReport.replyText.includes('Rp40.000'), 'monthRangeReport failed: ' + monthRangeReport.replyText);
+  console.log('Month-to-month transaction range: OK');
 
   const historicalDelete = await handleUserMessage('hapus transaksi 27 september 2026', 'user_range');
   console.assert(historicalDelete.success && historicalDelete.replyText.includes('27 September 2026'), 'historical delete output failed: ' + historicalDelete.replyText);

@@ -129,6 +129,7 @@ const MONTH_NAMES: Record<string, number> = {
   november: 10, nov: 10,
   desember: 11, des: 11, dec: 11
 };
+const MONTH_NAMES_PATTERN = 'januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|may|jun|jul|ags|aug|sep|sept|okt|oct|nov|des|dec';
 
 export interface QueryDateResult {
   period: 'day' | 'week' | 'month' | 'year';
@@ -162,6 +163,38 @@ export function parseQueryDate(text: string, referenceDate?: Date): QueryDateRes
     const resolvedYear = year ?? now.getFullYear();
     return new Date(resolvedYear, month, day);
   };
+
+  // Month-to-month ranges, e.g. "September - Oktober 2026", including
+  // ranges that cross a year boundary such as "November 2025 - Februari 2026".
+  const monthRangeMatch = lower.match(new RegExp(
+    `(?:\\b(?:bulan|month)\\s+)?(${MONTH_NAMES_PATTERN})(?:\\s+(20\\d{2}))?\\s*(?:-|–|—|sampai(?:\\s+dengan)?|hingga|s/d|s\\.d\\.?|sd|to|dan)\\s*(?:\\b(?:bulan|month)\\s+)?(${MONTH_NAMES_PATTERN})(?:\\s+(20\\d{2}))?`,
+    'i'
+  ));
+  if (monthRangeMatch) {
+    const startMonthIndex = MONTH_NAMES[monthRangeMatch[1].toLowerCase()];
+    const endMonthIndex = MONTH_NAMES[monthRangeMatch[3].toLowerCase()];
+    const explicitStartYear = monthRangeMatch[2] ? parseInt(monthRangeMatch[2], 10) : undefined;
+    const explicitEndYear = monthRangeMatch[4] ? parseInt(monthRangeMatch[4], 10) : undefined;
+
+    let startYear = explicitStartYear ?? explicitEndYear ?? now.getFullYear();
+    let endYear = explicitEndYear ?? explicitStartYear ?? now.getFullYear();
+    if (explicitStartYear !== undefined && explicitEndYear === undefined && endMonthIndex < startMonthIndex) endYear++;
+    if (explicitEndYear !== undefined && explicitStartYear === undefined && startMonthIndex > endMonthIndex) startYear--;
+
+    let start = new Date(startYear, startMonthIndex, 1);
+    let end = new Date(endYear, endMonthIndex + 1, 0);
+    if (end < start) {
+      [start, end] = [new Date(endYear, endMonthIndex, 1), new Date(startYear, startMonthIndex + 1, 0)];
+    }
+
+    const monthLabel = (date: Date) => date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+    return {
+      period: 'month',
+      startDate: toDateStr(start),
+      endDate: toDateStr(end),
+      displayDate: `${monthLabel(start)} - ${monthLabel(end)}`
+    };
+  }
 
   const rangeMatch = lower.match(/(?:\b(?:tgl|tanggal)\s+)?(\d{1,2})\s*(?:-|–|—|sampai|sd)\s*(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?/i);
   if (rangeMatch) {
