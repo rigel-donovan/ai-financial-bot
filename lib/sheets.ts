@@ -496,37 +496,26 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
 
   let dashboardGid = await ensureUserDashboardSheet(sheets, sheetId, allSheets, userId);
 
-  // Hide shared all-user source tabs; show the editable tabs for this account.
-  const sourceSheetIds = allSheets
-    .filter((sheet) => {
-      const title = sheet.properties?.title || '';
-      return ['transactions', 'recurring_expenses', 'Dashboard'].includes(title);
-    })
-    .map((sheet) => sheet.properties?.sheetId)
-    .filter((sourceId): sourceId is number => sourceId != null);
-  if (sourceSheetIds.length > 0) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: sheetId,
-      requestBody: {
-        requests: sourceSheetIds.map((sourceSheetId) => ({
-          updateSheetProperties: {
-            properties: { sheetId: sourceSheetId, hidden: true },
-            fields: 'hidden'
-          }
-        }))
-      }
-    });
-  }
-
   const userTabIds = [transactionGid, recurringGid, dashboardGid]
     .filter((id): id is number => id != null);
   if (userTabIds.length > 0) {
+    // A Google Sheets tab's hidden state is workbook-wide. Hide every tab
+    // except the requesting user's three tabs so the link opens a focused
+    // per-user view. This is a presentation choice, not an access-control
+    // boundary: editors may still unhide tabs in the shared workbook.
+    const visibleTabIds = new Set(userTabIds);
+    const allKnownTabIds = new Set<number>([
+      ...allSheets
+        .map((sheet) => sheet.properties?.sheetId)
+        .filter((id): id is number => id != null),
+      ...userTabIds
+    ]);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: sheetId,
       requestBody: {
-        requests: userTabIds.map((id) => ({
+        requests: [...allKnownTabIds].map((id) => ({
           updateSheetProperties: {
-            properties: { sheetId: id, hidden: false },
+            properties: { sheetId: id, hidden: !visibleTabIds.has(id) },
             fields: 'hidden'
           }
         }))

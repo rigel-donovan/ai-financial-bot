@@ -1189,8 +1189,8 @@ async function handleDownloadSpreadsheet(userId?: string): Promise<ExecutionResu
   return {
     success: true,
     replyText: '📊 *Spreadsheet Keuangan Realtime*\n\n' +
-      'Buka transaksi akun Anda: ' + links.transactions + '\n\n' +
-      'Tab Transactions dan Recurring ini dibuat khusus untuk ID Telegram Anda. Anda bisa menambah, mengedit, dan menghapus data langsung; bot akan menyelaraskannya saat membaca data akun. Akun Telegram lain juga bisa memakai fitur yang sama dengan mengirim `sheet` dari chat mereka sendiri. Dashboard tersedia di tab lain.'
+      'Buka spreadsheet akun Anda: ' + links.dashboard + '\n\n' +
+      'Spreadsheet dibuka pada Dashboard dan menampilkan tab Transactions serta Recurring khusus untuk ID Telegram Anda. Anda bisa mengelola data dari tab tersebut; bot akan menyelaraskannya saat membaca data akun. Akun Telegram lain juga bisa memakai fitur ini dari chat mereka sendiri.'
   };
 }
 
