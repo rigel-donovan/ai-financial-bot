@@ -36,6 +36,12 @@ export function formatRp(amount: number): string {
  */
 export function formatDate(isoStr: string): string {
   try {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) {
+      const [year, month, day] = isoStr.split('-').map(Number);
+      return new Date(year, month - 1, day).toLocaleDateString('id-ID', {
+        day: 'numeric', month: 'short', year: 'numeric'
+      });
+    }
     const d = new Date(isoStr);
     return d.toLocaleDateString('id-ID', {
       day: 'numeric',
@@ -561,6 +567,10 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
 
 function matchesDateRange(isoStr: string, startDate?: string, endDate?: string): boolean {
   if (!isoStr || !startDate || !endDate) return false;
+  // Per-user Sheets rows store calendar dates without a time component.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) {
+    return isoStr >= startDate && isoStr <= endDate;
+  }
   try {
     const txDate = new Date(isoStr);
     if (isNaN(txDate.getTime())) return false;

@@ -28,6 +28,19 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
   }
 }
 
+/** Store transaction dates in Sheets as calendar dates, while bot objects keep timestamps. */
+function toSheetDate(value: unknown): string {
+  const text = String(value ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 /**
  * Get Google Sheets API client with service account auth
  */
@@ -229,7 +242,13 @@ async function ensureUserDataView(
       spreadsheetId,
       range: `'${sourceTitle}'!A2:${columnEnd}`
     });
-    const filteredRows = (sourceValues.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+    const filteredRows = (sourceValues.data.values || [])
+      .filter((row) => String(row[1] ?? '').trim() === userId)
+      .map((row) => {
+        const normalized = [...row];
+        normalized[8] = toSheetDate(normalized[8]);
+        return normalized;
+      });
     await sheets.spreadsheets.values.clear({
       spreadsheetId,
       range: `'${title}'!A2:${columnEnd}`
@@ -327,7 +346,7 @@ function normalizeUserTransactionRows(rows: any[][], userId: string): any[][] {
     row[3] = amount;
     row[4] = row[4] || 'Lainnya';
     row[7] = row[7] || 'manual';
-    row[8] = row[8] || now;
+    row[8] = toSheetDate(row[8] || now);
     return [row.slice(0, 10)];
   });
 }
@@ -349,7 +368,13 @@ async function syncUserTransactionsToMaster(
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'transactions!A2:J' })
   ]);
   if (hasFormula(userData.data.values || [])) {
-    const personalRows = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+    const personalRows = (masterData.data.values || [])
+      .filter((row) => String(row[1] ?? '').trim() === userId)
+      .map((row) => {
+        const normalized = [...row];
+        normalized[8] = toSheetDate(normalized[8]);
+        return normalized;
+      });
     await restoreUserTabFromMaster(sheets, spreadsheetId, userTitle, personalRows, 'J');
     return true;
   }
@@ -458,7 +483,13 @@ async function refreshUserDataTabFromMaster(
   });
   if (!metadata.data.sheets?.some((sheet) => sheet.properties?.title === userTitle)) return;
   const source = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${sourceTitle}'!A2:${columnEnd}` });
-  const userRows = (source.data.values || []).filter((row) => String(row[1] ?? '').trim() === userId);
+  const userRows = (source.data.values || [])
+    .filter((row) => String(row[1] ?? '').trim() === userId)
+    .map((row) => {
+      const normalized = [...row];
+      if (sourceTitle === 'transactions') normalized[8] = toSheetDate(normalized[8]);
+      return normalized;
+    });
   await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:${columnEnd}` });
   if (userRows.length) {
     await sheets.spreadsheets.values.update({
@@ -737,7 +768,7 @@ export async function appendTransaction(tx: Transaction): Promise<void> {
           tx.note,
           tx.raw_message,
           tx.source,
-          tx.created_at,
+          toSheetDate(tx.created_at),
           tx.qty || ''
         ]
       ]
@@ -1211,7 +1242,7 @@ export async function editTransaction(
           spreadsheetId: sheetId,
           range: `transactions!I${targetRowIndex}`,
           valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [[updatedCreatedAt]] }
+          requestBody: { values: [[toSheetDate(updatedCreatedAt)]] }
         });
       }
       if (opts.newQty !== undefined) {
@@ -1237,7 +1268,7 @@ export async function editTransaction(
           spreadsheetId: sheetId,
           range: `transactions!H${targetRowIndex}`,
           valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [[updatedCreatedAt]] }
+          requestBody: { values: [[toSheetDate(updatedCreatedAt)]] }
         });
       }
     }
