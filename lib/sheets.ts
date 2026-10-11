@@ -32,6 +32,20 @@ function matchesTargetDate(isoStr: string, targetDate: string): boolean {
 function toSheetDate(value: unknown): string {
   const text = String(value ?? '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  // Sheets may return date cells as serial day numbers. Older writes
+  // mistakenly treated those numbers as years and stored e.g. 46301-01-01;
+  // recover both the serial and that malformed representation here.
+  const malformedSerialDate = text.match(/^(\d{5,7})-01-01$/);
+  const serialMatch = malformedSerialDate || text.match(/^(\d{5,7})(?:\.\d+)?$/);
+  if (serialMatch) {
+    const serial = Number(serialMatch[1]);
+    if (serial >= 20000 && serial <= 2958465) {
+      const date = new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000);
+      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    }
+  }
+
   const date = new Date(text);
   if (Number.isNaN(date.getTime())) return text;
   const parts = new Intl.DateTimeFormat('en-CA', {
