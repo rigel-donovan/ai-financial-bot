@@ -92,6 +92,7 @@ ${topItemsText}
 ${question ? `PERMINTAAN PENGGUNA:
 "${question.replace(/"/g, "'")}"
 
+
 Tugasmu:
 1. Jawab pertanyaan pengguna secara LANGSUNG dengan memakai ANGKA dari data di atas.
 2. Kalau pertanyaannya soal rata-rata, hitung dari data: total pengeluaran / jumlah transaksi, atau total / jumlah hari sesuai makna kalimatnya.

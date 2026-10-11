@@ -113,10 +113,14 @@ ATURAN KRITIS (WAJIB DIPATUHI):
    - "berapa?" / "totalnya?" setelah mencatat transaksi → type "summary".
    - Kalau tidak ada konteks yang relevan, perlakukan pesan secara mandiri seperti biasa.
 8. ATURAN KUANTITAS (QTY) & CATATAN (NOTE):
-   - Jika pengguna menyebutkan kuantitas/jumlah barang (contoh: 30 pcs, 5 buah, 2 cup, 3 porsi, 10 box, 2x), ekstrak angkanya saja ke field 'qty' (contoh: 30, 5, 2, 3, 10, 2).
+   - Jika pengguna menyebutkan kuantitas dalam bahasa apa pun yang umum dipakai, ekstrak jumlahnya ke field 'qty'. Satuan mencakup pc/pcs/piece, buah/bh/biji/butir, unit/item/barang/produk, porsi, cup/gelas/botol/kaleng, pack/pak/paket/bungkus/box/kotak/dus, lembar/helai, batang/ekor, set/pasang, kg/gram/liter/ml, serta format 2x atau 2 kali. Abaikan variasi kapitalisasi, spasi, dan tanda baca.
+   - Jangan mengambil angka kuantitas sebagai nominal. Pada "pemasukan 1 Oktober 2026 jahe komplit 3 pc sebesar 20rb", tanggal = 1 Oktober 2026, qty = 3, amount = 20000, note = "jahe komplit".
+   - Angka kuantitas boleh muncul sebelum atau sesudah nama barang ("3 biji donat 15rb", "donat 3 biji total 15rb", "jual 4 item seharga Rp20.000"). Ambil nominal uang dari konteks mata uang/harga/total; jangan memilih angka tanggal atau qty sebagai amount.
    - HAPUS kata penghubung nominal seperti 'sebesar', 'senilai', 'seharga', 'sejumlah', 'totalnya', 'harganya' dari note/keterangan agar catatan bersih dan rapi.
-   - HAPUS kuantitas (seperti '30 pcs') dari note jika sudah dimasukkan ke 'qty'.
+   - HAPUS frasa kuantitas (angka dan satuannya) dari note jika sudah dimasukkan ke 'qty'.
    Contoh: "penjualan es teh manis 30 pcs sebesar 250k" => amount: 250000, qty: 30, note: "penjualan es teh manis", category: "Income".
+   Contoh: "beli 3 pc jahe komplit 20rb" => amount: 20000, qty: 3, note: "jahe komplit".
+   Contoh: "jual 5 biji kue @4rb" => amount: 20000 (total jika jelas harga per item), qty: 5, note: "kue". Jika total tidak dapat ditentukan dengan yakin, jangan mengarang amount.
 9. Kembalikan JSON SAJA tanpa penjelasan, tanpa markdown, tanpa backtick.
 
 KLASIFIKASI INTENT:
@@ -192,6 +196,10 @@ CONTOH LENGKAP (pelajari pola-polanya):
 Catat Pengeluaran:
 - "beli kopi 25rb" => {"type":"expense","amount":25000,"note":"kopi","category":"Food"}
 - "beli ayam geprek 5 porsi seharga 75rb" => {"type":"expense","amount":75000,"qty":5,"note":"ayam geprek","category":"Food"}
+- "beli 3 pc jahe komplit total 20rb" => {"type":"expense","amount":20000,"qty":3,"note":"jahe komplit","category":"Food"}
+- "pengeluaran 4 biji donat sebesar Rp24.000" => {"type":"expense","amount":24000,"qty":4,"note":"donat","category":"Food"}
+- "jual 2 item aksesori 50k" => {"type":"income","amount":50000,"qty":2,"note":"aksesori","category":"Income"}
+- "masuk 1 Oktober 2026 jahe komplit 3 pc sebesar 20rb" => {"type":"income","amount":20000,"qty":3,"note":"jahe komplit","category":"Income","target_date":"2026-10-01"}
 - "order kopi susu 3 cup total 45k" => {"type":"expense","amount":45000,"qty":3,"note":"kopi susu","category":"Food"}
 - "abis 50k makan" => {"type":"expense","amount":50000,"note":"makan","category":"Food"}
 - "bensin 100rb" => {"type":"expense","amount":100000,"note":"bensin","category":"Transport"}

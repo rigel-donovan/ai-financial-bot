@@ -184,7 +184,7 @@ export function extractReceiptFromOcrText(text: string): ReceiptExtraction {
    * dibaca jadi total Rp1).
    */
   const qtyLabel =
-    /\b(?:total\s*(?:item|items?|qty|barang|kuantitas|pcs|product)|jumlah\s*(?:item|barang|baris|produk)|item\s*count|qty)\b/i;
+    /\b(?:total\s*(?:item|items?|pc|pcs|piece|pieces|qty|unit|units|barang|kuantitas|product|produk)|jumlah\s*(?:item|barang|baris|produk|unit)|item\s*count|qty)\b/i;
 
   /**
    * Prioritas label nominal, dari yang paling kuat:
@@ -352,7 +352,7 @@ export function extractReceiptFromOcrText(text: string): ReceiptExtraction {
   // Deteksi kuantitas total (Total Item: 4, Total Qty: 4, atau hitungan baris item)
   let detectedQty: number | undefined;
   for (const line of lines) {
-    const qtySummaryMatch = line.match(/\b(?:total\s*(?:item|items?|qty|pcs|barang|kuantitas)|items?|qty|pcs)\s*[:=]?\s*(\d+)\b/i);
+    const qtySummaryMatch = line.match(/\b(?:total\s*(?:item|items?|pc|pcs|piece|pieces|qty|unit|units|barang|kuantitas|product|produk)|items?|pc|pcs|pieces?|qty|unit|units|barang|produk)\s*[:=]?\s*(\d+)\b/i);
     if (qtySummaryMatch) {
       const q = parseInt(qtySummaryMatch[1], 10);
       if (q > 0 && q <= 9999) {
@@ -560,7 +560,7 @@ export async function scanReceiptImage(
 Kamu adalah asisten keuangan pribadi yang ahli membaca struk belanja, bon kasir, struk ATM, atau invoice di Indonesia.
 Analisis gambar struk ini dan ekstrak informasi berikut:
 1. total_amount: angka total nominal akhir yang dibayarkan (hanya angka bulat positif, tanpa titik/koma/Rp, contoh: 45000). Jika ada diskon/pajak, ambil nilai FINAL yang dibayar pembeli.
-2. qty: total kuantitas/jumlah seluruh item/barang yang dibeli dalam struk (angka bulat positif, contoh: jika beli 4 roti maka 4, jika struk menunjukkan 'Total Items: 4' atau 4 baris item masing-masing 1 pcs maka isi 4). Jika tidak ada info jumlah atau hanya beli 1 item/bensin/parkir, isi minimal 1.
+2. qty: total kuantitas seluruh barang yang dibeli (angka bulat positif). Kenali satuan dan label seperti pc/pcs/piece, buah/biji/butir, item/barang/produk, unit, porsi, cup, botol, pack, box, bungkus, lembar, batang, serta 'Total Items', 'Total Qty', 'Jumlah Barang', atau 'Total Unit'. Jumlahkan angka kuantitas pada tiap baris item (misalnya '3 pc Roti' berarti 3), bukan jumlah baris. Jika struk tidak memberi jumlah yang jelas, isi 1.
 3. merchant: nama toko / merchant / restoran / penyedia layanan (contoh: "Indomaret", "Alfamart", "Kopi Kenangan", "SPBU Pertamina", "Apotek Kimia Farma"). Jika tidak terbaca, gunakan "Toko/Merchant".
 4. category: pilih salah satu kategori yang paling cocok dari: Food, Transport, Bills, Entertainment, Shopping, Health, Donation, Lainnya.
 5. items: daftar ringkas 1-4 barang yang dibeli (contoh: "Kopi Latte, Roti").

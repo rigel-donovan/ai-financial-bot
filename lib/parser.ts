@@ -39,6 +39,16 @@ export const DEFAULT_CATEGORY_KEYWORDS: Record<string, string[]> = {
   ]
 };
 
+// Common unit names and abbreviations used to express transaction quantity.
+// Keep this shared across quantity extraction and amount detection so a
+// count like "3 pc" is never mistaken for a currency amount.
+const QUANTITY_UNIT_PATTERN =
+  '(?:pc|pcs|piece|pieces|buah|bh|biji|butir|unit|units|item|items|barang|produk|product|products|porsi|portion|portions|cup|cups|gelas|glass|glasses|botol|btl|bottle|bottles|kaleng|can|cans|pack|pak|paket|bungkus|bks|box|boxes|kotak|ktk|dus|karton|lusin|set|sets|pasang|slice|potong|ptg|ekor|ekr|batang|bat|lembar|lbr|helai|roll|sachet|sct|kg|kilo|kilogram|gram|gr|ons|liter|ltr|ml|meter|cm|ikat|ikat|tangkai|bijian|buahnya)';
+
+function startsWithQuantityUnit(text: string): boolean {
+  return new RegExp(`^(?:${QUANTITY_UNIT_PATTERN})\\b`, 'i').test(text);
+}
+
 /**
  * Parse Indonesian number formats like:
  * - 25000, 25.000, 25,000
@@ -426,7 +436,7 @@ export function extractTransactionAmount(text: string): { amount: number; raw: s
     // Guard: Abaikan jika angka ini segera diikuti satuan kuantitas (seperti "100 pcs", "50 cup")
     // kecuali angka tersebut memiliki prefix atau suffix mata uang (rp, idr, k, rb, jt)
     const textAfter = text.slice(index + raw.length, index + raw.length + 15).trim().toLowerCase();
-    const isQtyUnit = /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr|x\b)/i.test(textAfter);
+    const isQtyUnit = startsWithQuantityUnit(textAfter) || /^x\b/i.test(textAfter);
     if (isQtyUnit && !/[k|rb|ribu|jt|juta|m|rp|idr]/i.test(raw)) {
       continue;
     }
@@ -711,10 +721,11 @@ export function extractDateContextFromText(text: string): { targetDate?: string;
  * Returns { qty, raw } or null if no quantity found.
  */
 function extractQty(text: string): { qty: number; raw: string } | null {
-  // Pattern: <number> <unit> — e.g. "30 pcs", "5 buah", "2 porsi", "10 cup", "3 botol"
-  const qtyMatch = text.match(
-    /(?:\b(?:sebanyak|sejumlah)\s+)?\b(\d+)\s*(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i
-  );
+  // Pattern: <number> <unit>, e.g. "3 pc", "5 biji", "2 item", "10 box".
+  const qtyMatch = text.match(new RegExp(
+    `(?:\\b(?:sebanyak|sejumlah|jumlah|qty)\\s+)?\\b(\\d+)\\s*${QUANTITY_UNIT_PATTERN}\\b`,
+    'i'
+  ));
   if (qtyMatch) {
     const qty = parseInt(qtyMatch[1], 10);
     if (qty > 0 && qty <= 99999) {
@@ -1263,7 +1274,7 @@ export function parseMessage(
     // number mistakes a date such as "1 Oktober 2026" for Rp1.
     const extractedAmount = extractExplicitAmount(incomeBody) || extractTransactionAmount(incomeBody);
     const leadingAmountCandidate = incomeBody.match(/^(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+|$)/i);
-    const leadingAmountIsQty = leadingAmountCandidate && /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i.test(incomeBody.slice(leadingAmountCandidate[0].length).trim());
+    const leadingAmountIsQty = leadingAmountCandidate && startsWithQuantityUnit(incomeBody.slice(leadingAmountCandidate[0].length).trim());
     const leadingAmount = !dateContext && !leadingAmountIsQty ? leadingAmountCandidate : null;
     const amountRaw = extractedAmount?.raw || leadingAmount?.[0];
     const amount = amountRaw ? parseAmount(amountRaw) : null;
@@ -1305,7 +1316,7 @@ export function parseMessage(
     const expenseBody = expensePrefixMatch[1].trim();
     const extractedAmount = extractTransactionAmount(expenseBody);
     const leadingAmountCandidate = expenseBody.match(/^(?:rp\.?\s*)?([0-9.,]+(?:\s*(?:k|rb|ribu|jt|juta|m))?)(?:\s+|$)/i);
-    const leadingAmountIsQty = leadingAmountCandidate && /^(?:pcs|buah|bh|biji|unit|porsi|cup|gelas|botol|btl|pack|pak|bungkus|bks|lembar|lbr|kotak|ktk|dus|lusin|set|pasang|slice|potong|ptg|ekor|ekr|mangkok|mgk|item|pieces?|qty|roll|sachet|sct|kg|gram|gr|ons|liter|ltr)\b/i.test(expenseBody.slice(leadingAmountCandidate[0].length).trim());
+    const leadingAmountIsQty = leadingAmountCandidate && startsWithQuantityUnit(expenseBody.slice(leadingAmountCandidate[0].length).trim());
     const leadingAmount = !dateContext && !leadingAmountIsQty ? leadingAmountCandidate : null;
     const amountRaw = extractedAmount?.raw || leadingAmount?.[0];
     const amount = amountRaw ? parseAmount(amountRaw) : null;
