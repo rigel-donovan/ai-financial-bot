@@ -19,6 +19,12 @@ Chatbot pribadi untuk mencatat dan mengelola pengeluaran harian, ringkasan berka
 7. **AI Financial Advisor (Google Gemini 2.0 Flash)**: Ketik `saran` atau `analisa` untuk mendapatkan insight hemat cerdas dari AI.
 8. **Interactive Menu**: Ketik `menu` untuk memunculkan WhatsApp interactive list message.
 9. **Built-in Web Simulator**: Halaman dashboard modern (`/`) untuk mencoba semua perintah langsung dari browser tanpa perlu setup WA terlebih dahulu.
+10. **🧠 Extended Context Understanding (NEW!)**:
+    - **Histori Percakapan Multi-Turn**: Bot mengingat 10 pesan terakhir untuk memahami referensi seperti "yang tadi", "itu", "sama kayak barusan"
+    - **Persistent Context**: Histori percakapan disimpan di Google Sheets sehingga tidak hilang saat server restart
+    - **Learning Engine**: Bot belajar dari pola transaksi Anda (merchant → kategori favorit, nominal rata-rata)
+    - **Smart Suggestions**: Reminder tagihan rutin yang mendekati jatuh tempo, deteksi anomali pengeluaran, template transaksi otomatis
+    - **Rich AI Context**: Gemini AI menerima histori percakapan lengkap untuk pemahaman yang lebih baik
 
 ---
 

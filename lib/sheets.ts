@@ -12,7 +12,9 @@ const mockStore = {
     { keyword: 'listrik, air, wifi, pulsa, kos', category: 'Bills' },
     { keyword: 'netflix, bioskop, game, nonton', category: 'Entertainment' },
     { keyword: 'belanja, baju, sepatu, shopee, tokped', category: 'Shopping' },
-  ] as CategoryMapping[]
+  ] as CategoryMapping[],
+  conversationLog: [] as Array<{ userId: string; role: 'user' | 'bot'; text: string; intent?: string; timestamp: number }>,
+  userPreferences: [] as Array<{ userId: string; type: string; key: string; value: string; count: number; lastUpdated: string }>
 };
 
 function matchesTargetDate(isoStr: string, targetDate: string): boolean {
@@ -607,6 +609,12 @@ export async function ensureSheetStructure(): Promise<void> {
     if (!existingSheets.includes('recurring_expenses')) {
       requests.push({ addSheet: { properties: { title: 'recurring_expenses' } } });
     }
+    if (!existingSheets.includes('conversation_log')) {
+      requests.push({ addSheet: { properties: { title: 'conversation_log' } } });
+    }
+    if (!existingSheets.includes('user_preferences')) {
+      requests.push({ addSheet: { properties: { title: 'user_preferences' } } });
+    }
 
     if (requests.length > 0) {
       await sheets.spreadsheets.batchUpdate({
@@ -745,6 +753,38 @@ export async function ensureSheetStructure(): Promise<void> {
             ['netflix, bioskop, spotify, nonton', 'Entertainment'],
             ['belanja, baju, sepatu, shopee, tokped', 'Shopping']
           ]
+        }
+      });
+    }
+
+    // 4. Conversation Log Sheet
+    const convLogHeader = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: 'conversation_log!A1:E1'
+    });
+    if (!convLogHeader.data.values || convLogHeader.data.values.length === 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: 'conversation_log!A1:E1',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [['id', 'user_id', 'role', 'text', 'intent', 'timestamp']]
+        }
+      });
+    }
+
+    // 5. User Preferences Sheet
+    const prefHeader = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: 'user_preferences!A1:F1'
+    });
+    if (!prefHeader.data.values || prefHeader.data.values.length === 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: 'user_preferences!A1:F1',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [['user_id', 'type', 'key', 'value', 'count', 'last_updated']]
         }
       });
     }
@@ -1557,4 +1597,100 @@ export async function getCategoryMappings(): Promise<Record<string, string[]>> {
   }
 
   return map;
+}
+
+/**
+ * Append conversation log entry (fire-and-forget, tidak blocking)
+ */
+export async function appendConversationLog(
+  userId: string,
+  role: 'user' | 'bot',
+  text: string,
+  intent?: string
+): Promise<void> {
+  const client = getSheetsClient();
+  if (!client) {
+    mockStore.conversationLog.push({
+      userId,
+      role,
+      text,
+      intent,
+      timestamp: Date.now()
+    });
+    // Batasi mockStore max 100 entri
+    if (mockStore.conversationLog.length > 100) {
+      mockStore.conversationLog = mockStore.conversationLog.slice(-100);
+    }
+    return;
+  }
+
+  const { sheets, sheetId } = client;
+  
+  try {
+    const id = randomUUID();
+    const timestamp = new Date().toISOString();
+    
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: 'conversation_log!A:F',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[id, userId, role, text, intent || '', timestamp]]
+      }
+    });
+
+    // Cleanup: hapus baris lama jika > 1000 per user (opsional, async)
+    // Untuk production, pertimbangkan scheduled cleanup terpisah
+  } catch (err) {
+    console.error('[appendConversationLog] Error:', err);
+    // Fire-and-forget: tidak throw error ke caller
+  }
+}
+
+/**
+ * Get recent conversation log for a user (untuk seed context)
+ */
+export async function getRecentConversationLog(
+  userId: string,
+  limit = 10
+): Promise<Array<{ role: 'user' | 'bot'; text: string; intent?: string; timestamp: number }>> {
+  const client = getSheetsClient();
+  
+  if (!client) {
+    return mockStore.conversationLog
+      .filter((log) => log.userId === userId)
+      .slice(-limit)
+      .map((log) => ({
+        role: log.role,
+        text: log.text,
+        intent: log.intent,
+        timestamp: log.timestamp
+      }));
+  }
+
+  const { sheets, sheetId } = client;
+
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: 'conversation_log!A2:F'
+    });
+
+    const rows = res.data.values || [];
+    const userLogs = rows
+      .filter((row) => row[1] === userId) // row[1] = user_id
+      .map((row) => ({
+        role: (row[2] || 'user') as 'user' | 'bot',
+        text: String(row[3] || ''),
+        intent: row[4] ? String(row[4]) : undefined,
+        timestamp: new Date(row[5] || Date.now()).getTime()
+      }))
+      .slice(-limit); // Ambil N terakhir
+
+    return userLogs;
+  } catch (err) {
+    console.error('[getRecentConversationLog] Error:', err);
+    return [];
+  }
 }

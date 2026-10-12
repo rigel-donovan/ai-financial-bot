@@ -13,16 +13,40 @@ const candidateModels = [
 
 /**
  * Ringkas konteks percakapan menjadi blok teks untuk prompt.
- * Sengaja dibuat sangat pendek agar hemat token.
+ * 
+ * Mengirim hingga 5 pesan terakhir sebagai dialog untuk Gemini,
+ * ditambah summary singkat dari lastTransaction/lastPeriod/lastCategory.
  */
 function buildConversationBlock(context?: ConversationContext): string {
   if (!context) return '';
 
   const lines: string[] = [];
 
+  // 1. Histori percakapan multi-turn (5 entri terakhir)
+  if (context.messageHistory && context.messageHistory.length > 0) {
+    const recentHistory = context.messageHistory.slice(-5); // Ambil 5 terakhir
+    const dialogLines = recentHistory.map((entry) => {
+      const label = entry.role === 'user' ? 'User' : 'Bot';
+      // Truncate teks panjang agar tidak melebihi 100 karakter per baris
+      const truncated = entry.text.length > 100 
+        ? entry.text.substring(0, 100) + '...' 
+        : entry.text;
+      return `[${label}]: ${truncated}`;
+    });
+    
+    if (dialogLines.length > 0) {
+      lines.push('HISTORI PERCAKAPAN TERAKHIR:');
+      lines.push(...dialogLines);
+      lines.push(''); // blank line separator
+    }
+  }
+
+  // 2. Summary singkat (backward compatibility dengan sistem lama)
+  const summaryLines: string[] = [];
+
   if (context.lastTransaction) {
     const t = context.lastTransaction;
-    lines.push(
+    summaryLines.push(
       `- Transaksi terakhir: ${t.type === 'expense' ? 'pengeluaran' : 'pemasukan'} ${formatPlainAmount(t.amount)}` +
       `${t.note ? ` (${t.note})` : ''}${t.category ? ` [${t.category}]` : ''}` +
       `${t.date ? ` tanggal ${t.date}` : ''}`
@@ -30,26 +54,34 @@ function buildConversationBlock(context?: ConversationContext): string {
   }
 
   if (context.lastPeriod?.displayDate) {
-    lines.push(`- Periode terakhir yang ditanyakan: ${context.lastPeriod.displayDate}`);
+    summaryLines.push(`- Periode terakhir yang ditanyakan: ${context.lastPeriod.displayDate}`);
   }
 
   if (context.lastCategory) {
-    lines.push(`- Kategori terakhir yang difilter: ${context.lastCategory}`);
+    summaryLines.push(`- Kategori terakhir yang difilter: ${context.lastCategory}`);
   }
 
   if (context.pending) {
-    lines.push(
+    summaryLines.push(
       `- Ada transaksi yang belum lengkap: ${context.pending.intent === 'RECORD_EXPENSE' ? 'pengeluaran' : 'pemasukan'}` +
       `${context.pending.note ? ` (${context.pending.note})` : ''} — nominal belum ada, user kemungkinan akan mengirim nominal pada pesan berikutnya.`
     );
   }
 
-  if (!lines.length) return '';
+  if (summaryLines.length > 0) {
+    lines.push('KONTEKS TAMBAHAN:');
+    lines.push(...summaryLines);
+  }
 
-  return `
-KONTEKS PERCAKAPAN SEBELUMNYA (penting untuk memahami perintah lanjutan):
-${lines.join('\n')}
-`;
+  if (lines.length === 0) return '';
+
+  // Batasi total panjang agar tidak melebihi ~800 karakter
+  const fullBlock = lines.join('\n');
+  if (fullBlock.length > 800) {
+    return fullBlock.substring(0, 800) + '...[truncated]';
+  }
+
+  return '\n' + fullBlock + '\n';
 }
 
 function formatPlainAmount(amount: number): string {
@@ -83,13 +115,14 @@ export async function parseNaturalLanguageWithAI(
   // sementara rawMessage tetap memakai pesan asli user.
   const modelText = normalizeText(trimmed) || trimmed;
 
-  // Ringkasan percakapan sebelumnya, supaya Gemini bisa memahami perintah
-  // lanjutan yang bergantung konteks.
+  // Ringkasan percakapan sebelumnya (hingga 5 pesan terakhir sebagai dialog),
+  // supaya Gemini bisa memahami perintah lanjutan yang bergantung konteks.
   const conversationBlock = buildConversationBlock(context);
 
   const prompt = `Kamu adalah AI parser SUPER CERDAS untuk bot catatan keuangan Indonesia.
 Kamu HARUS memahami SEMUA variasi bahasa Indonesia informal, slang, singkatan, typo, campuran Indonesia-Inggris, dan susunan kata yang bebas. Jangan terpaku pada pola/format tertentu.
 
+${conversationBlock ? `${conversationBlock}\n\nGunakan histori percakapan di atas untuk memahami referensi seperti "itu", "yang tadi", "sama kayak barusan", "terus", dll. Jika user menyebut sesuatu tanpa detail, cek histori untuk melengkapi konteks.\n` : ''}
 ATURAN KRITIS (WAJIB DIPATUHI):
 0. KAMU HANYA BOLEH MENJAWAB TENTANG KEUANGAN. Bot ini adalah pencatat keuangan pribadi.
    - Kalau pesan user di luar topik keuangan (cuaca, jokes, berita, tugas sekolah, pertanyaan umum),

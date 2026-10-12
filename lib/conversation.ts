@@ -6,13 +6,24 @@
  * Modul ini menyimpan konteks singkat antar pesan supaya perintah lanjutan
  * bisa dipahami.
  *
- * Penyimpanan: in-memory Map per instance serverless.
- * - Tidak menambah latency (tidak memanggil jaringan)
- * - Kehilangan konteks saat instance restart adalah perilaku yang dapat diterima
- *   (user cukup mengulang capitalize: perintahnya sendiri akan gagal baik).
+ * Penyimpanan: in-memory Map per instance serverless + persistent Sheets.
+ * - In-memory untuk latency rendah
+ * - Sheets untuk persistensi lintas restart instance
  */
 
 import { IntentType } from '@/types';
+
+/** Satu entri dalam histori percakapan. */
+export interface MessageHistoryEntry {
+  /** 'user' untuk pesan dari user, 'bot' untuk reply bot. */
+  role: 'user' | 'bot';
+  /** Teks pesan/reply. */
+  text: string;
+  /** Intent yang dipahami dari pesan (hanya untuk role=user). */
+  intent?: IntentType;
+  /** Timestamp pesan. */
+  timestamp: number;
+}
 
 /** Konteks satu round-of-chat untuk satu pengguna. */
 export interface ConversationContext {
@@ -42,6 +53,10 @@ export interface ConversationContext {
     note?: string;
     category?: string;
   };
+  /** Histori 10 pesan terakhir (user + bot replies) untuk konteks multi-turn. */
+  messageHistory?: MessageHistoryEntry[];
+  /** Flag apakah context sudah di-seed dari Sheets persistent storage. */
+  seeded?: boolean;
   updatedAt: number;
 }
 
@@ -82,7 +97,11 @@ export function getContext(userId?: string): ConversationContext {
   const existing = sessions.get(key);
   if (existing) return existing;
 
-  const fresh: ConversationContext = { updatedAt: now };
+  const fresh: ConversationContext = { 
+    updatedAt: now,
+    messageHistory: [],
+    seeded: false
+  };
   sessions.set(key, fresh);
   return fresh;
 }
@@ -101,13 +120,19 @@ export function updateContext(
     period?: ConversationContext['lastPeriod'];
     category?: string;
     pending?: ConversationContext['pending'];
-  } = {}
+  } = {},
+  userMessage?: string,
+  botReply?: string
 ): void {
   const key = userId || '__anonymous__';
   const now = Date.now();
   prune(now);
 
-  const ctx = sessions.get(key) || { updatedAt: now };
+  const ctx = sessions.get(key) || { 
+    updatedAt: now, 
+    messageHistory: [],
+    seeded: false
+  };
 
   ctx.lastIntent = intent;
   ctx.updatedAt = now;
@@ -117,6 +142,37 @@ export function updateContext(
   if (details.category) ctx.lastCategory = details.category;
   if (details.pending) ctx.pending = details.pending;
   else delete ctx.pending;
+
+  // Tambahkan ke messageHistory jika ada userMessage atau botReply
+  if (!ctx.messageHistory) ctx.messageHistory = [];
+  
+  if (userMessage) {
+    ctx.messageHistory.push({
+      role: 'user',
+      text: userMessage,
+      intent,
+      timestamp: now
+    });
+  }
+  
+  if (botReply) {
+    ctx.messageHistory.push({
+      role: 'bot',
+      text: botReply,
+      timestamp: now
+    });
+  }
+
+  // Batasi histori ke 10 entri terakhir (FIFO)
+  const MAX_HISTORY = 10;
+  if (ctx.messageHistory.length > MAX_HISTORY) {
+    ctx.messageHistory = ctx.messageHistory.slice(-MAX_HISTORY);
+  }
+
+  // Bersihkan entri yang lebih tua dari SESSION_TTL_MS
+  ctx.messageHistory = ctx.messageHistory.filter(
+    (entry) => now - entry.timestamp <= SESSION_TTL_MS
+  );
 
   sessions.set(key, ctx);
 }

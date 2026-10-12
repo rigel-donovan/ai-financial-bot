@@ -562,7 +562,51 @@ function resolveFollowUp(
     };
   }
 
-  // 2. Pertanyaan elipsis yang merujuk periode terakhir:
+  // 2. "sama kayak tadi tapi [X]" → copy amount dari lastTransaction, ganti note
+  if (/\bsama\s+(?:kayak|seperti|kaya)\s+(?:tadi|barusan|yang\s+tadi)\b/i.test(lower) && context.lastTransaction) {
+    const amount = context.lastTransaction.amount;
+    // Extract note baru setelah "tapi", "trus", "terus", "untuk", dll
+    const newNoteMatch = lower.match(/(?:tapi|tetapi|trus|terus|untuk|buat)\s+(.+)/i);
+    const newNote = newNoteMatch ? newNoteMatch[1].trim() : undefined;
+    
+    return {
+      intent: context.lastTransaction.type === 'expense' ? 'RECORD_EXPENSE' : 'RECORD_INCOME',
+      amount,
+      note: newNote || context.lastTransaction.note,
+      category: context.lastTransaction.category,
+      rawMessage: text
+    };
+  }
+
+  // 3. "catat lagi" / "tambah lagi" → repeat lastTransaction persis
+  if (/\b(?:catat|tambah|tambahin)\s+lagi\b/i.test(lower) && context.lastTransaction) {
+    return {
+      intent: context.lastTransaction.type === 'expense' ? 'RECORD_EXPENSE' : 'RECORD_INCOME',
+      amount: context.lastTransaction.amount,
+      note: context.lastTransaction.note,
+      category: context.lastTransaction.category,
+      rawMessage: text
+    };
+  }
+
+  // 4. "bukan [X] tapi [Y]" tanpa kata "edit" → auto-detect EDIT_LAST
+  if (/\bbukan\s+(.+?)\s+(?:tapi|tetapi|harusnya|seharusnya)\s+(.+)/i.test(lower)) {
+    const match = lower.match(/\bbukan\s+(.+?)\s+(?:tapi|tetapi|harusnya|seharusnya)\s+(.+)/i);
+    if (match) {
+      const newValue = match[2].trim();
+      const amount = extractTransactionAmount(newValue)?.amount;
+      const newNote = amount ? undefined : newValue;
+      
+      return {
+        intent: 'EDIT_LAST',
+        amount,
+        note: newNote,
+        rawMessage: text
+      };
+    }
+  }
+
+  // 5. Pertanyaan elipsis yang merujuk periode terakhir:
   //    "yang kemarin?", "periode tadi berapa?"
   const isElliptical = ELLIPTICAL_QUESTION.test(lower) || BACKREFERENCE_WORDS.test(lower);
   if (isElliptical && context.lastPeriod) {
@@ -610,7 +654,7 @@ function resolveFollowUp(
     };
   }
 
-  // 3. Kategori yang disebutkan saat sebelumnya difilter:
+  // 6. Kategori yang disebutkan saat sebelumnya difilter:
   //    "yang food aja?", "kategori transport?"
   if (context.lastCategory && /^(?:yang\s+)?[a-z]{3,20}\s*(?:aja|saja)?$/i.test(lower)) {
     const detected = detectCategory(lower, undefined);
@@ -645,7 +689,7 @@ function resolveFollowUp(
     }
   }
 
-  // 4. "hapus yang tadi" / "hapus itu" → hapus transaksi terakhir yang dikenang.
+  // 7. "hapus yang tadi" / "hapus itu" → hapus transaksi terakhir yang dikenang.
   //    Dilewati bila pesan sudah menyebut tanggal/periode sendiri, mis.
   //    "hapus transaksi 27 september 2026" harus mengikuti tanggalnya,
   //    bukan transaksi terakhir yang dikenang.
@@ -661,7 +705,7 @@ function resolveFollowUp(
     };
   }
 
-  // 5. "yang tadi bukan 25k tapi 30k" → edit transaksi terakhir.
+  // 8. "yang tadi bukan 25k tapi 30k" → edit transaksi terakhir.
   if (/\b(?:tadi|terakhir|itu|sebelumnya)\b/i.test(lower) &&
       /\b(?:salah|edit|ubah|ganti|koreksi|bukan|tapi|harusnya|harusnya)\b/i.test(lower)) {
     const amount = extractTransactionAmount(text)?.amount;
@@ -673,7 +717,7 @@ function resolveFollowUp(
     };
   }
 
-  // 6. "berapa?" / "totalnya?" setelah mencatat transaksi → ringkas.
+  // 9. "berapa?" / "totalnya?" setelah mencatat transaksi → ringkas.
   if (ELLIPTICAL_QUESTION.test(lower) && context.lastIntent &&
       (context.lastIntent === 'RECORD_EXPENSE' || context.lastIntent === 'RECORD_INCOME')) {
     return { intent: 'SUMMARY_DAY', period: 'day', rawMessage: text };

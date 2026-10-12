@@ -21,8 +21,16 @@ import {
   toggleRecurringExpense,
   getCategoryMappings,
   getUserSpreadsheetLinks,
+  appendConversationLog,
+  getRecentConversationLog
 } from './sheets';
 import { generateFinancialAdvice } from './ai-advisor';
+import { learnFromTransaction, suggestCategory } from './user-preferences';
+import {
+  checkUpcomingRecurring,
+  detectSpendingAnomaly,
+  suggestTransactionTemplate
+} from './smart-suggestions';
 
 /**
  * Format number to Indonesian Rupiah currency string
@@ -253,6 +261,35 @@ export async function handleUserMessage(
 ): Promise<ExecutionResult> {
   const categoryMap = await getCategoryMappings();
   const context = getContext(userId);
+
+  // Seed context dari Sheets jika ini first message setelah instance restart
+  const enablePersistentContext = process.env.ENABLE_PERSISTENT_CONTEXT !== 'false';
+  if (enablePersistentContext && userId && !context.seeded) {
+    try {
+      const recentLog = await getRecentConversationLog(userId, 10);
+      if (recentLog.length > 0) {
+        context.messageHistory = recentLog.map((log) => ({
+          role: log.role,
+          text: log.text,
+          intent: log.intent as any,
+          timestamp: log.timestamp
+        }));
+        context.seeded = true;
+      }
+    } catch (err) {
+      console.warn('[handleUserMessage] Failed to seed context from Sheets:', err);
+    }
+  }
+
+  // Check upcoming recurring (non-blocking)
+  const enableSmartSuggestions = process.env.ENABLE_SMART_SUGGESTIONS !== 'false';
+  let upcomingReminder: string | null = null;
+  if (enableSmartSuggestions && userId) {
+    checkUpcomingRecurring(userId).then((reminder) => {
+      upcomingReminder = reminder;
+    }).catch((err) => console.warn('[upcomingRecurring] Error:', err));
+  }
+
   let parsed: ParsedIntent = parseMessage(rawText, categoryMap, context);
 
   // Multi-transaksi: satu pesan berisi beberapa catatan, mis.
@@ -260,7 +297,16 @@ export async function handleUserMessage(
   // Dicoba sebelum AI karena lebih murah dan hasilnya deterministik.
   const multiIntents = parseMultiTransaction(rawText, categoryMap);
   if (multiIntents && multiIntents.length > 1) {
-    return await handleMultipleTransactions(multiIntents, userId);
+    const result = await handleMultipleTransactions(multiIntents, userId);
+    
+    // Persist conversation log (async, non-blocking)
+    if (enablePersistentContext && userId) {
+      appendConversationLog(userId, 'user', rawText, 'MULTI_TRANSACTION').catch(() => {});
+      appendConversationLog(userId, 'bot', result.replyText).catch(() => {});
+    }
+    
+    updateContext(userId, 'RECORD_EXPENSE', {}, rawText, result.replyText);
+    return result;
   }
 
   // Fallback ke Gemini AI Natural Language Understanding jika regex belum mengenali.
@@ -268,6 +314,20 @@ export async function handleUserMessage(
   // diteruskan ke Gemini, dan Gemini tetap diarahkan pada konteks catatan
   // keuangan (lihat prompt di lib/ai-nlu.ts).
   if (parsed.intent === 'UNKNOWN' && process.env.GEMINI_API_KEY) {
+    // Try smart transaction template suggestion first
+    if (enableSmartSuggestions && userId) {
+      try {
+        const template = await suggestTransactionTemplate(userId, rawText);
+        if (template) {
+          // Return suggestion to user for confirmation
+          const suggestionText = `💡 Apakah maksud Anda:\n"${template.note} ${template.amount.toLocaleString('id-ID')}"\n\nBalas dengan angka saja jika benar, atau tulis pesan lengkap.`;
+          return { success: true, replyText: suggestionText };
+        }
+      } catch (err) {
+        console.warn('[suggestTransactionTemplate] Error:', err);
+      }
+    }
+
     try {
       const aiParsed = await parseNaturalLanguageWithAI(rawText, categoryMap, context);
       if (aiParsed && aiParsed.intent !== 'UNKNOWN') {
@@ -280,11 +340,47 @@ export async function handleUserMessage(
 
   const result = await dispatchIntent(parsed, userId);
 
+  // Learning dari transaksi berhasil (async, non-blocking)
+  const enableLearning = process.env.ENABLE_LEARNING !== 'false';
+  if (enableLearning && userId && result.success) {
+    if (parsed.intent === 'RECORD_EXPENSE' || parsed.intent === 'RECORD_INCOME') {
+      if (parsed.amount && parsed.note && parsed.category) {
+        learnFromTransaction(userId, parsed.note, parsed.category, parsed.amount)
+          .catch((err) => console.warn('[learnFromTransaction] Error:', err));
+      }
+    }
+  }
+
+  // Detect spending anomaly (async, dengan timeout 500ms)
+  let anomalyWarning: string | null = null;
+  if (enableSmartSuggestions && userId && result.success && parsed.intent === 'RECORD_EXPENSE') {
+    if (parsed.amount && parsed.category) {
+      try {
+        const anomalyPromise = detectSpendingAnomaly(userId, parsed.category, parsed.amount);
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 500));
+        anomalyWarning = await Promise.race([anomalyPromise, timeoutPromise]);
+      } catch (err) {
+        console.warn('[detectSpendingAnomaly] Error:', err);
+      }
+    }
+  }
+
+  // Append anomaly warning dan upcoming reminder ke reply
+  let finalReply = result.replyText;
+  if (anomalyWarning) finalReply += anomalyWarning;
+  if (upcomingReminder && parsed.intent === 'MENU') finalReply += upcomingReminder;
+
+  // Persist conversation log (async, non-blocking)
+  if (enablePersistentContext && userId) {
+    appendConversationLog(userId, 'user', rawText, parsed.intent).catch(() => {});
+    appendConversationLog(userId, 'bot', finalReply).catch(() => {});
+  }
+
   // Simpan konteks SESUDAH intent dijalankan, memakai hasil sebenarnya supaya
   // commands yang gagal tidak ikut remembered.
-  rememberOutcome(userId, parsed, result);
+  rememberOutcome(userId, parsed, { ...result, replyText: finalReply }, rawText, finalReply);
 
-  return result;
+  return { ...result, replyText: finalReply };
 }
 
 /**
@@ -294,7 +390,9 @@ export async function handleUserMessage(
 function rememberOutcome(
   userId: string | undefined,
   parsed: ParsedIntent,
-  result: ExecutionResult
+  result: ExecutionResult,
+  userMessage?: string,
+  botReply?: string
 ): void {
   const isReportIntent =
     parsed.intent.startsWith('SUMMARY_') ||
@@ -339,7 +437,7 @@ function rememberOutcome(
     };
   }
 
-  updateContext(userId, parsed.intent, update);
+  updateContext(userId, parsed.intent, update, userMessage, botReply);
 }
 
 /**
