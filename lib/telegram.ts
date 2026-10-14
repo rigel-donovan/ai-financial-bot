@@ -88,6 +88,126 @@ export async function sendTelegramTextMessage({ chatId, text, replyMarkup }: Sen
 }
 
 /**
+ * Send chat action (typing, upload_photo, etc) to show bot is working
+ */
+export async function sendChatAction(chatId: string | number, action: 'typing' | 'upload_photo' | 'upload_document' = 'typing'): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return false;
+
+  const url = `https://api.telegram.org/bot${token}/sendChatAction`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        action
+      })
+    });
+
+    return res.ok;
+  } catch (err) {
+    console.error('Failed to send chat action:', err);
+    return false;
+  }
+}
+
+/**
+ * Send a loading message that can be edited later
+ * Returns message_id for editing
+ */
+export async function sendLoadingMessage(chatId: string | number, loadingText: string): Promise<number | null> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return null;
+
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: loadingText
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.result?.message_id || null;
+    }
+    return null;
+  } catch (err) {
+    console.error('Failed to send loading message:', err);
+    return null;
+  }
+}
+
+/**
+ * Edit an existing message by message_id
+ */
+export async function editTelegramMessage(
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  replyMarkup?: TelegramReplyMarkup
+): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return false;
+
+  const url = `https://api.telegram.org/bot${token}/editMessageText`;
+  const telegramText = text.replace(/https?:\/\/[^\s]+/g, (link) =>
+    link.replace(/_/g, '\\_')
+  );
+
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: telegramText,
+      parse_mode: 'Markdown'
+    };
+
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      return true;
+    }
+
+    // Fallback without markdown
+    const fallbackPayload: any = {
+      chat_id: chatId,
+      message_id: messageId,
+      text
+    };
+
+    if (replyMarkup) {
+      fallbackPayload.reply_markup = replyMarkup;
+    }
+
+    const fallbackRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fallbackPayload)
+    });
+
+    return fallbackRes.ok;
+  } catch (err) {
+    console.error('Failed to edit message:', err);
+    return false;
+  }
+}
+
+/**
  * Set bot commands menu that appears when user types /
  */
 export async function setTelegramBotCommands(): Promise<boolean> {

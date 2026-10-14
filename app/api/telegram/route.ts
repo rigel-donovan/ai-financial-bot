@@ -5,7 +5,10 @@ import {
   getMainMenuKeyboard, 
   getQuickTransactionKeyboard,
   getReportOptionsKeyboard,
-  getSubscriptionKeyboard
+  getSubscriptionKeyboard,
+  sendChatAction,
+  sendLoadingMessage,
+  editTelegramMessage
 } from '@/lib/telegram';
 import { scanReceiptImage } from '@/lib/receipt-scanner';
 import { parseQueryDate } from '@/lib/parser';
@@ -289,6 +292,8 @@ export async function GET() {
 // ==================== MENU CALLBACK HANDLERS ====================
 
 async function handleMenuCallback(chatId: string | number, callbackData: string): Promise<NextResponse> {
+  let loadingMessageId: number | null = null;
+
   switch (callbackData) {
     case 'menu_main':
       const menuText = 
@@ -314,11 +319,18 @@ async function handleMenuCallback(chatId: string | number, callbackData: string)
       break;
 
     case 'menu_saldo':
+      // Show loading indicator
+      await sendChatAction(chatId, 'typing');
+      loadingMessageId = await sendLoadingMessage(chatId, '💰 *Mengecek saldo...*\n⏳ Mohon tunggu sebentar...');
+      
       const result = await handleUserMessage('saldo sekarang', String(chatId));
-      await sendTelegramTextMessage({
-        chatId,
-        text: result.replyText
-      });
+      
+      // Edit loading message with result
+      if (loadingMessageId) {
+        await editTelegramMessage(chatId, loadingMessageId, result.replyText);
+      } else {
+        await sendTelegramTextMessage({ chatId, text: result.replyText });
+      }
       break;
 
     case 'menu_laporan':
@@ -344,11 +356,18 @@ async function handleMenuCallback(chatId: string | number, callbackData: string)
       break;
 
     case 'menu_saran':
+      // Show loading indicator
+      await sendChatAction(chatId, 'typing');
+      loadingMessageId = await sendLoadingMessage(chatId, '💡 *Menganalisis keuangan Anda...*\n🤖 AI sedang bekerja, mohon tunggu...');
+      
       const saranResult = await handleUserMessage('saran financial', String(chatId));
-      await sendTelegramTextMessage({
-        chatId,
-        text: saranResult.replyText
-      });
+      
+      // Edit loading message with result
+      if (loadingMessageId) {
+        await editTelegramMessage(chatId, loadingMessageId, saranResult.replyText);
+      } else {
+        await sendTelegramTextMessage({ chatId, text: saranResult.replyText });
+      }
       break;
 
     case 'menu_scan':
@@ -475,11 +494,18 @@ async function handleQuickTransaction(chatId: string | number, callbackData: str
   }
 
   if (transactionText) {
+    // Show loading indicator
+    await sendChatAction(chatId, 'typing');
+    const loadingMessageId = await sendLoadingMessage(chatId, `✏️ *Mencatat transaksi...*\n⏳ _"${transactionText}"_`);
+    
     const result = await handleUserMessage(transactionText, String(chatId));
-    await sendTelegramTextMessage({
-      chatId,
-      text: result.replyText
-    });
+    
+    // Edit loading message with result
+    if (loadingMessageId) {
+      await editTelegramMessage(chatId, loadingMessageId, result.replyText);
+    } else {
+      await sendTelegramTextMessage({ chatId, text: result.replyText });
+    }
   }
 
   return NextResponse.json({ ok: true });
@@ -507,12 +533,22 @@ async function handleReportCallback(chatId: string | number, callbackData: strin
   }
 
   if (queryText) {
+    // Show loading indicator
+    await sendChatAction(chatId, 'typing');
+    const loadingMessageId = await sendLoadingMessage(chatId, '📊 *Membuat laporan...*\n⏳ Mengumpulkan data transaksi...');
+    
     const result = await handleUserMessage(queryText, String(chatId));
-    await sendTelegramTextMessage({
-      chatId,
-      text: result.replyText,
-      replyMarkup: getReportOptionsKeyboard()
-    });
+    
+    // Edit loading message with result
+    if (loadingMessageId) {
+      await editTelegramMessage(chatId, loadingMessageId, result.replyText, getReportOptionsKeyboard());
+    } else {
+      await sendTelegramTextMessage({
+        chatId,
+        text: result.replyText,
+        replyMarkup: getReportOptionsKeyboard()
+      });
+    }
   }
 
   return NextResponse.json({ ok: true });
@@ -550,12 +586,22 @@ async function handleSubscriptionCallback(chatId: string | number, callbackData:
   }
 
   if (queryText) {
+    // Show loading indicator
+    await sendChatAction(chatId, 'typing');
+    const loadingMessageId = await sendLoadingMessage(chatId, '📅 *Memproses...*\n⏳ Mengambil data langganan...');
+    
     const result = await handleUserMessage(queryText, String(chatId));
-    await sendTelegramTextMessage({
-      chatId,
-      text: result.replyText,
-      replyMarkup: getSubscriptionKeyboard()
-    });
+    
+    // Edit loading message with result
+    if (loadingMessageId) {
+      await editTelegramMessage(chatId, loadingMessageId, result.replyText, getSubscriptionKeyboard());
+    } else {
+      await sendTelegramTextMessage({
+        chatId,
+        text: result.replyText,
+        replyMarkup: getSubscriptionKeyboard()
+      });
+    }
   }
 
   return NextResponse.json({ ok: true });
