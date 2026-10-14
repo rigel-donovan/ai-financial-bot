@@ -395,9 +395,38 @@ async function syncUserTransactionsToMaster(
     return true;
   }
   const userRows = normalizeUserTransactionRows(userData.data.values || [], userId);
-  const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
+  const masterRows = masterData.data.values || [];
+  
+  // SAFETY CHECK: Log filtering for debugging data loss
+  const beforeFilterCount = masterRows.length;
+  const otherUsers = masterRows.filter((row) => {
+    const rowUserId = String(row[1] ?? '').trim();
+    return rowUserId !== '' && rowUserId !== userId;
+  });
+  const afterFilterCount = otherUsers.length;
+  const userDataInMaster = masterRows.filter((row) => String(row[1] ?? '').trim() === userId);
+  
+  // Log if significant data loss detected (more than expected difference)
+  if (beforeFilterCount > 0 && afterFilterCount + userDataInMaster.length < beforeFilterCount) {
+    console.warn(`[syncUserTransactions] Potential data loss detected for user ${userId}:`, {
+      beforeFilter: beforeFilterCount,
+      afterFilter: afterFilterCount,
+      userDataInMaster: userDataInMaster.length,
+      userRowsFromTab: userRows.length,
+      missing: beforeFilterCount - afterFilterCount - userDataInMaster.length
+    });
+  }
+
   const mergedRows = [...otherUsers, ...userRows];
 
+  // SAFETY CHECK: Only clear and update if we have data OR explicit empty state
+  // Never clear if mergedRows is empty when masterRows had data (potential filter bug)
+  if (mergedRows.length === 0 && masterRows.length > 0) {
+    console.error(`[syncUserTransactions] BLOCKED: Attempted to clear all data when master has ${masterRows.length} rows. This would cause data loss.`);
+    return false;
+  }
+
+  // Update user tab first
   await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:J` });
   if (userRows.length) {
     await sheets.spreadsheets.values.update({
@@ -407,6 +436,8 @@ async function syncUserTransactionsToMaster(
       requestBody: { values: userRows }
     });
   }
+  
+  // Update master tab with merged data
   await sheets.spreadsheets.values.clear({ spreadsheetId, range: 'transactions!A2:J' });
   if (mergedRows.length) {
     await sheets.spreadsheets.values.update({
@@ -416,6 +447,7 @@ async function syncUserTransactionsToMaster(
       requestBody: { values: mergedRows }
     });
   }
+  
   return true;
 }
 
@@ -460,8 +492,34 @@ async function syncUserRecurringToMaster(
     return true;
   }
   const userRows = normalizeUserRecurringRows(userData.data.values || [], userId);
-  const otherUsers = (masterData.data.values || []).filter((row) => String(row[1] ?? '').trim() !== userId);
+  const masterRows = masterData.data.values || [];
+  
+  // SAFETY CHECK: Log filtering for debugging data loss
+  const beforeFilterCount = masterRows.length;
+  const otherUsers = masterRows.filter((row) => {
+    const rowUserId = String(row[1] ?? '').trim();
+    return rowUserId !== '' && rowUserId !== userId;
+  });
+  const afterFilterCount = otherUsers.length;
+  const userDataInMaster = masterRows.filter((row) => String(row[1] ?? '').trim() === userId);
+  
+  if (beforeFilterCount > 0 && afterFilterCount + userDataInMaster.length < beforeFilterCount) {
+    console.warn(`[syncUserRecurring] Potential data loss detected for user ${userId}:`, {
+      beforeFilter: beforeFilterCount,
+      afterFilter: afterFilterCount,
+      userDataInMaster: userDataInMaster.length,
+      userRowsFromTab: userRows.length,
+      missing: beforeFilterCount - afterFilterCount - userDataInMaster.length
+    });
+  }
+
   const mergedRows = [...otherUsers, ...userRows];
+
+  // SAFETY CHECK: Block destructive clear if data would be lost
+  if (mergedRows.length === 0 && masterRows.length > 0) {
+    console.error(`[syncUserRecurring] BLOCKED: Attempted to clear all data when master has ${masterRows.length} rows. This would cause data loss.`);
+    return false;
+  }
 
   await sheets.spreadsheets.values.clear({ spreadsheetId, range: `'${userTitle}'!A2:I` });
   if (userRows.length) {
@@ -481,6 +539,7 @@ async function syncUserRecurringToMaster(
       requestBody: { values: mergedRows }
     });
   }
+  
   return true;
 }
 
