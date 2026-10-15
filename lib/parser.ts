@@ -1179,7 +1179,6 @@ export function parseMessage(
       };
     }
 
-    // Pola C: "edit [terakhir] [nominal/keterangan]" (cth: "edit 35k", "edit terakhir 30000", "koreksi 35rb")
     const directMatch = trimmed.match(/^(?:edit|ubah|ganti|koreksi|ralat|revisi)(?:\s+terakhir)?(?:\s+nominal)?\s+(.+)$/i);
     if (directMatch) {
       const rest = directMatch[1].trim();
@@ -1208,7 +1207,6 @@ export function parseMessage(
   }
 
   // 6. Pengeluaran Rutin & Langganan: List
-  // Mendukung: "list langganan", "daftar langganan", "cek langganan", "langganan apa aja", "langganan aktif", "tolong cek langganan", "buatin list langganan", dsb.
   const isListRecurring =
     /\b(?:list|daftar|cek|rincian|lihat|tampilkan|tampilin|semua)\s+(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs|tagihan\s+rutin)(?:ku)?\b/i.test(lower) ||
     /\b(?:rutin|langganan|subscription|subs)(?:ku)?\s+(?:list|daftar|cek|rincian|apa\s+saja|apa\s+aja|aktif)\b/i.test(lower) ||
@@ -1222,7 +1220,6 @@ export function parseMessage(
   }
 
   // 7. Pengeluaran Rutin & Langganan: Hapus / Stop / Batal / Nonaktif
-  // Mendukung: "stop langganan netflix", "hapus langganan spotify", "berhenti langganan youtube", "batal langganan icloud", "hapus rutin wifi"
   const delRecurringMatch =
     trimmed.match(/^(?:hapus|batal|batalin|nonaktif|nonaktifkan|stop|berhenti|cancel|delete)\s+(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs|tagihan\s+rutin)\s+(.+)$/i) ||
     trimmed.match(/^(?:stop|berhenti)\s+(?:langganan|rutin)\s+(.+)$/i);
@@ -1236,7 +1233,6 @@ export function parseMessage(
   }
 
   // 8. Pengeluaran Rutin & Langganan: Panduan / Bantuan
-  // Mendukung: "cara langganan", "bantuan langganan", "panduan langganan", "info langganan", "rutin help"
   const isHelpRecurring =
     /^(?:(?:cara\s+|bantuan\s+|panduan\s+|info\s+)?(?:tambah\s+)?(?:pengeluaran\s+)?(?:rutin|langganan|subscription|subs)|(?:rutin|langganan|subscription|subs)\s+(?:cara|bantuan|panduan|info))$/i.test(cleanPrefix) ||
     /^(?:bantuan\s+langganan|cara\s+langganan|panduan\s+langganan|langganan\s+help|info\s+langganan|cara\s+rutin|bantuan\s+rutin)$/i.test(lower);

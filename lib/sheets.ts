@@ -35,9 +35,6 @@ function toSheetDate(value: unknown): string {
   const text = String(value ?? '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
 
-  // Sheets may return date cells as serial day numbers. Older writes
-  // mistakenly treated those numbers as years and stored e.g. 46301-01-01;
-  // recover both the serial and that malformed representation here.
   const malformedSerialDate = text.match(/^(\d{5,7})-01-01$/);
   const serialMatch = malformedSerialDate || text.match(/^(\d{5,7})(?:\.\d+)?$/);
   if (serialMatch) {
@@ -184,7 +181,7 @@ async function ensureUserDashboardSheet(
     valueInputOption: 'RAW',
     requestBody: { values: [[userId]] }
   });
-  // The copied template's validation dropdown contains every account ID.
+
   // Remove it on this personalized dashboard so it stays fixed to its owner.
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
@@ -419,7 +416,6 @@ async function syncUserTransactionsToMaster(
 
   const mergedRows = [...otherUsers, ...userRows];
 
-  // SAFETY CHECK: Only clear and update if we have data OR explicit empty state
   // Never clear if mergedRows is empty when masterRows had data (potential filter bug)
   if (mergedRows.length === 0 && masterRows.length > 0) {
     console.error(`[syncUserTransactions] BLOCKED: Attempted to clear all data when master has ${masterRows.length} rows. This would cause data loss.`);
@@ -493,8 +489,7 @@ async function syncUserRecurringToMaster(
   }
   const userRows = normalizeUserRecurringRows(userData.data.values || [], userId);
   const masterRows = masterData.data.values || [];
-  
-  // SAFETY CHECK: Log filtering for debugging data loss
+
   const beforeFilterCount = masterRows.length;
   const otherUsers = masterRows.filter((row) => {
     const rowUserId = String(row[1] ?? '').trim();
@@ -515,7 +510,6 @@ async function syncUserRecurringToMaster(
 
   const mergedRows = [...otherUsers, ...userRows];
 
-  // SAFETY CHECK: Block destructive clear if data would be lost
   if (mergedRows.length === 0 && masterRows.length > 0) {
     console.error(`[syncUserRecurring] BLOCKED: Attempted to clear all data when master has ${masterRows.length} rows. This would cause data loss.`);
     return false;
@@ -605,10 +599,7 @@ export async function getUserSpreadsheetLinks(userId: string): Promise<UserSprea
   const userTabIds = [transactionGid, recurringGid, dashboardGid]
     .filter((id): id is number => id != null);
   if (userTabIds.length > 0) {
-    // A Google Sheets tab's hidden state is workbook-wide. Hide every tab
-    // except the requesting user's three tabs so the link opens a focused
-    // per-user view. This is a presentation choice, not an access-control
-    // boundary: editors may still unhide tabs in the shared workbook.
+
     const visibleTabIds = new Set(userTabIds);
     const allKnownTabIds = new Set<number>([
       ...allSheets

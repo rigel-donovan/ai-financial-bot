@@ -244,6 +244,44 @@ export async function setTelegramBotCommands(): Promise<boolean> {
 }
 
 /**
+ * Get persistent reply keyboard (always visible at bottom of chat)
+ * This keyboard appears below the text input and persists across messages
+ */
+export function getPersistentReplyKeyboard(): TelegramReplyMarkup {
+  return {
+    keyboard: [
+      [
+        { text: '✏️ Catat Pengeluaran' },
+        { text: '💰 Cek Saldo' }
+      ],
+      [
+        { text: '📊 Laporan Bulan Ini' },
+        { text: '📅 Kelola Langganan' }
+      ],
+      [
+        { text: '💡 Saran AI' },
+        { text: '🛒 Scan Struk' }
+      ],
+      [
+        { text: '❓ Bantuan' },
+        { text: '📝 Contoh Chat' }
+      ]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false // Keep keyboard visible after use
+  };
+}
+
+/**
+ * Remove reply keyboard (hide the persistent keyboard)
+ */
+export function removeReplyKeyboard(): any {
+  return {
+    remove_keyboard: true
+  };
+}
+
+/**
  * Get main menu inline keyboard
  */
 export function getMainMenuKeyboard(): TelegramReplyMarkup {

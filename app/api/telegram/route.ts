@@ -8,7 +8,8 @@ import {
   getSubscriptionKeyboard,
   sendChatAction,
   sendLoadingMessage,
-  editTelegramMessage
+  editTelegramMessage,
+  getPersistentReplyKeyboard
 } from '@/lib/telegram';
 import { scanReceiptImage } from '@/lib/receipt-scanner';
 import { parseQueryDate } from '@/lib/parser';
@@ -141,12 +142,12 @@ export async function POST(req: NextRequest) {
         `• \`bensin 50.000\`\n` +
         `• \`gajian 5 juta\`\n` +
         `• Atau kirim *foto struk* 📷\n\n` +
-        `⚡ *Gunakan menu di bawah untuk akses cepat:*`;
+        `⚡ *Gunakan tombol di bawah untuk akses cepat!*`;
 
       await sendTelegramTextMessage({ 
         chatId, 
         text: welcome,
-        replyMarkup: getMainMenuKeyboard()
+        replyMarkup: getPersistentReplyKeyboard()
       });
       return NextResponse.json({ ok: true });
     }
@@ -155,12 +156,12 @@ export async function POST(req: NextRequest) {
     if (userText === '/menu') {
       const menuText = 
         `📋 *Menu Utama Bot Keuangan*\n\n` +
-        `Pilih menu yang Anda butuhkan:`;
+        `Pilih menu yang Anda butuhkan dengan tombol di bawah:`;
 
       await sendTelegramTextMessage({ 
         chatId, 
         text: menuText,
-        replyMarkup: getMainMenuKeyboard()
+        replyMarkup: getPersistentReplyKeyboard()
       });
       return NextResponse.json({ ok: true });
     }
@@ -250,14 +251,144 @@ export async function POST(req: NextRequest) {
         `Kirim foto struk belanja untuk dicatat otomatis!\n\n` +
         `*💡 AI Financial Advisor:*\n` +
         `Ketik \`saran\` untuk analisis & saran keuangan\n\n` +
-        `⚡ Gunakan */menu* untuk akses cepat semua fitur!`;
+        `⚡ Gunakan tombol di bawah untuk akses cepat!`;
 
       await sendTelegramTextMessage({ 
         chatId, 
         text: helpText,
-        replyMarkup: getMainMenuKeyboard()
+        replyMarkup: getPersistentReplyKeyboard()
       });
       return NextResponse.json({ ok: true });
+    }
+
+    // Handle keyboard button presses (match button text)
+    // These match the text from getPersistentReplyKeyboard()
+    switch (userText) {
+      case '✏️ Catat Pengeluaran':
+        const catatText = 
+          `✏️ *Catat Pengeluaran Cepat*\n\n` +
+          `Pilih template atau ketik manual:\n` +
+          `Contoh: \`beli makan siang 35rb\``;
+        await sendTelegramTextMessage({ 
+          chatId, 
+          text: catatText,
+          replyMarkup: getQuickTransactionKeyboard()
+        });
+        return NextResponse.json({ ok: true });
+
+      case '💰 Cek Saldo':
+        await sendChatAction(chatId, 'typing');
+        const loadingMsgSaldo = await sendLoadingMessage(chatId, '💰 *Mengecek saldo...*\n⏳ Mohon tunggu sebentar...');
+        const saldoResult = await handleUserMessage('saldo sekarang', String(chatId));
+        if (loadingMsgSaldo) {
+          await editTelegramMessage(chatId, loadingMsgSaldo, saldoResult.replyText);
+        } else {
+          await sendTelegramTextMessage({ chatId, text: saldoResult.replyText });
+        }
+        return NextResponse.json({ ok: true });
+
+      case '📊 Laporan Bulan Ini':
+        await sendChatAction(chatId, 'typing');
+        const loadingMsgLaporan = await sendLoadingMessage(chatId, '📊 *Membuat laporan...*\n⏳ Mengumpulkan data transaksi...');
+        const laporanResult = await handleUserMessage('pengeluaran bulan ini', String(chatId));
+        if (loadingMsgLaporan) {
+          await editTelegramMessage(chatId, loadingMsgLaporan, laporanResult.replyText);
+        } else {
+          await sendTelegramTextMessage({ chatId, text: laporanResult.replyText });
+        }
+        return NextResponse.json({ ok: true });
+
+      case '📅 Kelola Langganan':
+        const subMenuText = 
+          `📅 *Kelola Langganan Bulanan*\n\n` +
+          `Apa yang ingin Anda lakukan?`;
+        await sendTelegramTextMessage({ 
+          chatId, 
+          text: subMenuText,
+          replyMarkup: getSubscriptionKeyboard()
+        });
+        return NextResponse.json({ ok: true });
+
+      case '💡 Saran AI':
+        await sendChatAction(chatId, 'typing');
+        const loadingMsgSaran = await sendLoadingMessage(chatId, '💡 *Menganalisis keuangan Anda...*\n🤖 AI sedang bekerja, mohon tunggu...');
+        const saranResult = await handleUserMessage('saran financial', String(chatId));
+        if (loadingMsgSaran) {
+          await editTelegramMessage(chatId, loadingMsgSaran, saranResult.replyText);
+        } else {
+          await sendTelegramTextMessage({ chatId, text: saranResult.replyText });
+        }
+        return NextResponse.json({ ok: true });
+
+      case '🛒 Scan Struk':
+        const scanMenuText = 
+          `📷 *Scan Struk Belanja*\n\n` +
+          `Kirim foto struk belanja Anda, dan bot akan:\n` +
+          `✅ Membaca semua item dengan OCR + AI\n` +
+          `✅ Mendeteksi harga dan kategori\n` +
+          `✅ Mencatat otomatis ke spreadsheet\n\n` +
+          `💡 *Tips:*\n` +
+          `• Pastikan foto jelas & tulisan terbaca\n` +
+          `• Bisa tambahkan caption untuk tanggal khusus\n` +
+          `• Contoh caption: \`kemarin\`, \`3 hari lalu\``;
+        await sendTelegramTextMessage({ 
+          chatId, 
+          text: scanMenuText
+        });
+        return NextResponse.json({ ok: true });
+
+      case '❓ Bantuan':
+        const helpMenuText = 
+          `❓ *Panduan Penggunaan Bot*\n\n` +
+          `*📝 Cara Mencatat Transaksi:*\n` +
+          `• Pengeluaran: \`kopi 25k\`, \`makan 30rb\`\n` +
+          `• Pemasukan: \`gajian 5jt\`, \`bonus 500rb\`\n` +
+          `• Multi-item: \`ayam 25k sama tempe 5rb\`\n` +
+          `• Edit: \`bukan 25rb tapi 30rb\`\n` +
+          `• Hapus: \`hapus kopi tadi\`\n\n` +
+          `*📊 Cek Data:*\n` +
+          `• \`saldo\` - Total saldo\n` +
+          `• \`pengeluaran hari ini\`\n` +
+          `• \`pengeluaran bulan ini\`\n\n` +
+          `*📅 Langganan:*\n` +
+          `• \`list langganan\`\n` +
+          `• \`langganan netflix 186k tgl 5\`\n\n` +
+          `*💡 AI Advisor:*\n` +
+          `Ketik \`saran\` untuk analisis keuangan`;
+        await sendTelegramTextMessage({ 
+          chatId, 
+          text: helpMenuText,
+          replyMarkup: getMainMenuKeyboard()
+        });
+        return NextResponse.json({ ok: true });
+
+      case '📝 Contoh Chat':
+        const examplesMenuText = 
+          `📝 *Contoh Chat dengan Bot*\n\n` +
+          `*Pengeluaran:*\n` +
+          `• \`kopi 25k\`\n` +
+          `• \`beli bensin 50rb\`\n` +
+          `• \`makan siang warteg 15 ribu\`\n` +
+          `• \`bayar listrik 150.000\`\n` +
+          `• \`belanja indomaret 75k\`\n\n` +
+          `*Pemasukan:*\n` +
+          `• \`gajian 5 juta\`\n` +
+          `• \`dapat bonus 500rb\`\n` +
+          `• \`terima transferan 1jt\`\n\n` +
+          `*Multi-Item:*\n` +
+          `• \`beli ayam 25k sama tempe 5rb\`\n` +
+          `• \`kopi 20k dan roti 15k\`\n\n` +
+          `*Edit/Hapus:*\n` +
+          `• \`bukan 25rb tapi 30rb\`\n` +
+          `• \`ubah jadi 20k\`\n` +
+          `• \`hapus kopi tadi\`\n` +
+          `• \`batalkan transaksi terakhir\`\n\n` +
+          `Coba ketik sekarang! 💬`;
+        await sendTelegramTextMessage({ 
+          chatId, 
+          text: examplesMenuText
+        });
+        return NextResponse.json({ ok: true });
     }
 
     // Process user input through the core expense business logic
