@@ -81,7 +81,7 @@ wa-expense-bot/
 - `masuk 500000 gaji` → type=income, amount=500000, note="gaji"
 - `ringkasan bulan` → ambil semua baris `transactions` bulan berjalan dari Sheet, agregat di kode (bukan formula spreadsheet)
 - `hapus terakhir` → soft-delete transaksi terbaru
-- `menu` → balas WhatsApp interactive list message (format List Message dari WhatsApp Cloud API)
+- Telegram `menu`, `/menu`, `bantuan`, `panduan`, dan `/help` → tampilkan panduan dengan tombol keyboard persisten
 - `saran` / `analisa` → ambil data transaksi 7–30 hari terakhir, kirim ke Gemini API, balas hasilnya
 - `tambah rutin 150000 netflix tgl 5` → simpan ke sheet `recurring_expenses`
 - `list rutin` → tampilkan baris `recurring_expenses` yang `active=TRUE`

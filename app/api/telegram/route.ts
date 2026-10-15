@@ -9,7 +9,9 @@ import {
   sendChatAction,
   sendLoadingMessage,
   editTelegramMessage,
-  getPersistentReplyKeyboard
+  getPersistentReplyKeyboard,
+  isTelegramMenuRequest,
+  isTelegramHelpRequest
 } from '@/lib/telegram';
 import { scanReceiptImage } from '@/lib/receipt-scanner';
 import { parseQueryDate } from '@/lib/parser';
@@ -130,11 +132,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // Handle natural language menu/help requests (case-insensitive)
-    const lowerText = userText.toLowerCase();
-    
-    // Menu requests: "menu", "tampilkan menu", "lihat menu", etc
-    if (lowerText === 'menu' || lowerText.includes('tampilkan menu') || lowerText.includes('lihat menu') || lowerText.includes('mau menu')) {
+    // Handle menu/help phrases and Telegram slash commands.
+    if (isTelegramMenuRequest(userText)) {
       const menuText = 
         `� *Menu Utama Bot Keuangan*\n\n` +
         `Pilih menu yang Anda butuhkan dengan tombol di bawah:`;
@@ -147,10 +146,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (lowerText === 'bantuan' || lowerText === 'panduan' || lowerText === 'help' || 
-        lowerText.includes('cara pakai') || lowerText.includes('cara pake') || 
-        lowerText.includes('gimana') || lowerText.includes('tolong bantu') ||
-        lowerText.includes('minta bantuan') || lowerText.includes('butuh bantuan')) {
+    if (isTelegramHelpRequest(userText)) {
       const helpText = 
         `❓ *Panduan Penggunaan Bot*\n\n` +
         `*� Cara Mencatat Transaksi:*\n` +
@@ -326,7 +322,7 @@ export async function POST(req: NextRequest) {
         }
         return NextResponse.json({ ok: true });
 
-      case '🛒 Scan Struk':
+      case '📷 Scan Struk':
         const scanMenuText = 
           `📷 *Scan Struk Belanja*\n\n` +
           `Kirim foto struk belanja Anda, dan bot akan:\n` +

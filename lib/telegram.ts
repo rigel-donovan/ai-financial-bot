@@ -25,6 +25,22 @@ export function isTelegramConfigured(): boolean {
   return !!process.env.TELEGRAM_BOT_TOKEN;
 }
 
+function normalizeTelegramCommand(text: string): string {
+  return text.trim().toLowerCase().replace(/@\w+$/, '');
+}
+
+export function isTelegramMenuRequest(text: string): boolean {
+  return /^(?:\/menu|menu(?:\s+(?:utama|dong|ya|please|bot))?|(?:tolong\s+)?(?:tampilkan|lihat|buka)\s+menu|mau\s+menu)$/.test(
+    normalizeTelegramCommand(text)
+  );
+}
+
+export function isTelegramHelpRequest(text: string): boolean {
+  return /^(?:\/(?:help|bantuan|panduan)|(?:bantuan|panduan|help)(?:\s+(?:dong|ya|please|me|penggunaan(?:\s+bot)?|bot|ini))?|cara\s+(?:pakai|pake|menggunakan|penggunaan)(?:\s+bot)?|gimana(?:\s+cara(?:nya)?)?(?:\s+(?:pakai|pake|menggunakan))?|tolong\s+(?:bantu|bantuan)|minta\s+bantuan|butuh\s+bantuan|bisa\s+apa(?:\s+saja)?|perintah)$/.test(
+    normalizeTelegramCommand(text)
+  );
+}
+
 /**
  * Send text message to Telegram user/chat with optional reply markup (buttons)
  */
@@ -260,7 +276,7 @@ export function getPersistentReplyKeyboard(): TelegramReplyMarkup {
       ],
       [
         { text: '💡 Saran AI' },
-        { text: '🛒 Scan Struk' }
+        { text: '📷 Scan Struk' }
       ],
       [
         { text: '❓ Bantuan' },

@@ -1,5 +1,6 @@
 import { parseMessage, parseAmount, detectCategory, parseQueryDate, isAnalysisRequest } from '../lib/parser';
 import { handleUserMessage } from '../lib/transactions';
+import { isTelegramMenuRequest, isTelegramHelpRequest, getPersistentReplyKeyboard } from '../lib/telegram';
 import { scanReceiptImage, extractReceiptFromOcrText } from '../lib/receipt-scanner';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import ExcelJS from 'exceljs';
@@ -63,6 +64,19 @@ async function runTests() {
 
   const p8b = parseMessage('bantuan');
   console.assert(p8b.intent === 'HELP', 'p8b failed: ' + JSON.stringify(p8b));
+
+  for (const menuCommand of ['menu', '/menu', '/menu@expense_bot', 'menu utama', 'tampilkan menu', 'tolong buka menu']) {
+    console.assert(isTelegramMenuRequest(menuCommand), `Telegram menu shortcut should recognize "${menuCommand}"`);
+  }
+  for (const helpCommand of ['bantuan', 'bantuan dong', 'panduan', 'panduan penggunaan', '/help', '/help@expense_bot', 'cara pakai', 'gimana cara menggunakan']) {
+    console.assert(isTelegramHelpRequest(helpCommand), `Telegram help shortcut should recognize "${helpCommand}"`);
+  }
+  console.assert(
+    getPersistentReplyKeyboard().keyboard?.length === 4 &&
+      getPersistentReplyKeyboard().keyboard?.reduce((count, row) => count + row.length, 0) === 8 &&
+      getPersistentReplyKeyboard().keyboard?.some((row) => row.some((button) => button.text === '📷 Scan Struk')),
+    'Telegram quick-action keyboard should include the expected eight buttons'
+  );
 
   // Test Date-filtered queries
   const p9 = parseMessage('list pemasukan tanggal 27 september 2026');
